@@ -1,0 +1,7 @@
+# ghcr.io/astral-sh/uv:python3.13-bookworm, pinned by digest. The image has git.
+FROM ghcr.io/astral-sh/uv@sha256:47965cdc9d53a515f68f78241161c901e70051ce428f12e791bd7fe19f6a631a
+ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
+WORKDIR /app
+COPY . .
+RUN uv sync --frozen
+CMD ["uv", "run", "--frozen", "pytest"]

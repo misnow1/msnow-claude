@@ -1,0 +1,12 @@
+_subdirectory: template
+_exclude:
+  - "copier.yaml"
+  - "copier.yml"
+  - "~*"
+  - "*.py[co]"
+  - "__pycache__"
+  - ".git"
+  - ".DS_Store"
+  - ".svn"
+  - "AGENTS.md"
+  - "CLAUDE.md"
