@@ -88,6 +88,12 @@ def template(tmp_path: Path) -> FixtureTemplate:
 
 
 @pytest.fixture
+def released(template: FixtureTemplate) -> FixtureTemplate:
+    template.release("v0.1.0")
+    return template
+
+
+@pytest.fixture
 def run_apply() -> Callable[..., subprocess.CompletedProcess[str]]:
     def run(
         target: Path,
@@ -108,3 +114,29 @@ def run_apply() -> Callable[..., subprocess.CompletedProcess[str]]:
         )
 
     return run
+
+
+FIXTURES = REPO_ROOT / "tests" / "fixtures" / "github"
+SETTINGS_TEMPLATE = REPO_ROOT / "template" / ".github" / "bootstrap.yml"
+
+
+def run_github(target: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    """Run `bootstrap github` against a target repo."""
+    return subprocess.run(
+        [str(BOOTSTRAP), "github", str(target), *extra],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
+        env={**os.environ, **GIT_ENV},
+    )
+
+
+def repo_with_settings(path: Path, text: str | None = None) -> Path:
+    """Create a git repo that holds a GitHub settings file and nothing else."""
+    make_repo(path)
+    write_files(
+        path, {".github/bootstrap.yml": SETTINGS_TEMPLATE.read_text() if text is None else text}
+    )
+    return path

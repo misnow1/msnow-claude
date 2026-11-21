@@ -361,6 +361,7 @@ source = { editable = "." }
 dependencies = [
     { name = "copier" },
     { name = "packaging" },
+    { name = "pydantic" },
     { name = "pyyaml" },
 ]
 
@@ -376,6 +377,7 @@ dev = [
 requires-dist = [
     { name = "copier", specifier = ">=9.19,<9.20" },
     { name = "packaging", specifier = ">=23" },
+    { name = "pydantic", specifier = ">=2.14,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
 ]
 

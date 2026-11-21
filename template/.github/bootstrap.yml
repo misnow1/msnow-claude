@@ -1,0 +1,27 @@
+# Desired GitHub settings.
+# Schema: https://github.com/misnow1/msnow-claude/blob/main/docs/github-settings.md
+repository:
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+  squash_merge_commit_title: PR_TITLE
+  squash_merge_commit_message: PR_BODY
+  delete_branch_on_merge: true
+  allow_auto_merge: true
+labels:
+  - name: needs-triage
+    color: "FBCA04"
+    description: "Maintainer needs to evaluate this issue"
+  - name: needs-info
+    color: "D4C5F9"
+    description: "Waiting on reporter for more information"
+  - name: ready-for-agent
+    color: "0E8A16"
+    description: "Fully specified, ready for an AFK agent"
+  - name: ready-for-human
+    color: "1D76DB"
+    description: "Requires human implementation"
+  - name: wontfix
+    color: "FFFFFF"
+    description: "This will not be worked on"
+required_checks: []

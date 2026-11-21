@@ -7,16 +7,9 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-import pytest
 from conftest import FixtureTemplate, commit_all, make_repo
 
 Apply = Callable[..., subprocess.CompletedProcess[str]]
-
-
-@pytest.fixture
-def released(template: FixtureTemplate) -> FixtureTemplate:
-    template.release("v0.1.0")
-    return template
 
 
 def tree(path: Path) -> set[str]:
@@ -35,7 +28,12 @@ def test_apply_to_empty_repo_writes_agent_docs_and_answers_file(
     result = run_apply(target, released.path)
 
     assert result.returncode == 0, result.stderr
-    assert tree(target) == {"AGENTS.md", "CLAUDE.md", ".copier-answers.yml"}
+    assert tree(target) == {
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".copier-answers.yml",
+        ".github/bootstrap.yml",
+    }
 
 
 AGENTS_SECTIONS = {
