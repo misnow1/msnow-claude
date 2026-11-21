@@ -200,3 +200,17 @@ def test_answers_file_from_this_template_is_accepted(tmp_path: Path) -> None:
     result = run_apply(target)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_rerun_with_another_spelling_of_the_same_template_is_accepted(tmp_path: Path) -> None:
+    target = make_empty_repo(tmp_path / "repo")
+    assert run_apply(target).returncode == 0
+
+    result = subprocess.run(
+        [str(BOOTSTRAP), "apply", str(target), "--template", f"{REPO_ROOT}/"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

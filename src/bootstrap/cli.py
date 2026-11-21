@@ -41,6 +41,14 @@ def read_existing(path: Path) -> str | None:
     return text
 
 
+def normalize_source(source: str) -> str:
+    """Return a comparable form of a template source: a resolved path or a trimmed URL."""
+    path = Path(source)
+    if path.exists():
+        return str(path.resolve())
+    return source.rstrip("/").removesuffix(".git")
+
+
 def check_answers_file(path: Path, template: str) -> None:
     """Raise BootstrapError when the answers file belongs to another template.
 
@@ -53,10 +61,11 @@ def check_answers_file(path: Path, template: str) -> None:
     except yaml.YAMLError as error:
         raise BootstrapError(f"{path.name} is not valid YAML: {error}") from error
     source = data.get("_src_path") if isinstance(data, dict) else None
-    if source != template:
+    if not isinstance(source, str) or normalize_source(source) != normalize_source(template):
         raise BootstrapError(
-            f"{path.name} belongs to another template ({source!r}). "
-            "Bootstrap would overwrite it and break updates from that template."
+            f"{path.name} records the template {source!r}, not {template!r}. "
+            "Bootstrap would overwrite it and break updates from the other template. "
+            "Pass the same source string if both name one template."
         )
 
 
