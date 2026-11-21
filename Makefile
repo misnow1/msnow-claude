@@ -3,13 +3,13 @@
 check: lint format-check typecheck
 
 lint:
-	uv run ruff check .
+	uv run --locked ruff check .
 
 format-check:
-	uv run ruff format --check .
+	uv run --locked ruff format --check .
 
 typecheck:
-	uv run mypy
+	uv run --locked mypy
 
 test:
 	docker build -q -f Dockerfile.test -t msnow-bootstrap-test .

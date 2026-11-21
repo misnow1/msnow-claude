@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 
 import copier
+import yaml
+from copier.errors import CopierError
 
 from bootstrap import markers
 
@@ -30,7 +32,8 @@ def read_existing(path: Path) -> str | None:
         return None
     if not path.is_file():
         raise BootstrapError(f"{path.name} is not a regular file.")
-    text = path.read_text(encoding="utf-8")
+    with path.open(encoding="utf-8", newline="") as stream:
+        text = stream.read()
     try:
         markers.find_sections(text.splitlines(keepends=True))
     except markers.MarkerError as error:
@@ -38,10 +41,30 @@ def read_existing(path: Path) -> str | None:
     return text
 
 
+def check_answers_file(path: Path, template: str) -> None:
+    """Raise BootstrapError when the answers file belongs to another template.
+
+    Copier overwrites the answers file, which would break `copier update` for that template.
+    """
+    if not path.is_file():
+        return
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise BootstrapError(f"{path.name} is not valid YAML: {error}") from error
+    source = data.get("_src_path") if isinstance(data, dict) else None
+    if source != template:
+        raise BootstrapError(
+            f"{path.name} belongs to another template ({source!r}). "
+            "Bootstrap would overwrite it and break updates from that template."
+        )
+
+
 def apply(target: Path, template: str) -> None:
     if not target.is_dir():
         raise BootstrapError(f"target is not an existing directory: {target}")
     existing = {name: read_existing(target / name) for name in AGENT_FILES}
+    check_answers_file(target / ".copier-answers.yml", template)
     with copier.Worker(src_path=template, dst_path=target, defaults=True, quiet=True) as worker:
         worker.run_copy()
         sections_dir = worker.template.local_abspath / "sections"
@@ -63,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         apply(args.target, args.template)
-    except (BootstrapError, copier.CopierError) as error:
+    except (BootstrapError, CopierError, OSError, UnicodeDecodeError) as error:
         print(f"bootstrap: error: {error}", file=sys.stderr)
         return 1
     return 0

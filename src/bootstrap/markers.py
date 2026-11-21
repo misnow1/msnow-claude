@@ -9,26 +9,30 @@ from pathlib import Path
 
 MARKER = re.compile(r"^<!-- bootstrap:(begin|end) ([a-z0-9-]+) -->\s*$")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*$")
 
 
 class MarkerError(ValueError):
     """The markers in a file are unbalanced, duplicated, nested or out of order."""
 
 
-def block(name: str, body: str) -> str:
-    return f"<!-- bootstrap:begin {name} -->\n{body.strip()}\n<!-- bootstrap:end {name} -->\n"
+def block(name: str, body: str, eol: str = "\n") -> str:
+    text = f"<!-- bootstrap:begin {name} -->\n{body.strip()}\n<!-- bootstrap:end {name} -->\n"
+    return text.replace("\n", eol)
 
 
 def marker_lines(lines: list[str]) -> Iterator[tuple[int, str, str]]:
     """Yield the index, kind and name of each marker line outside code fences."""
     fence: str | None = None
     for index, line in enumerate(lines):
-        fence_match = FENCE.match(line)
-        if fence_match:
-            run = fence_match.group(1)
-            if fence is None:
-                fence = run
-            elif run[0] == fence[0] and len(run) >= len(fence):
+        if fence is None:
+            opener = FENCE.match(line)
+            if opener:
+                fence = opener.group(1)
+                continue
+        else:
+            closer = FENCE_CLOSE.match(line)
+            if closer and closer.group(1)[0] == fence[0] and len(closer.group(1)) >= len(fence):
                 fence = None
             continue
         marker = MARKER.match(line)
@@ -65,17 +69,18 @@ def render(existing: str | None, sections: dict[str, str]) -> str:
     """Return the file text with each section written. Text outside the markers stays."""
     if existing is None:
         return "\n".join(block(name, body) for name, body in sections.items())
+    eol = "\r\n" if "\r\n" in existing else "\n"
     lines = existing.splitlines(keepends=True)
     spans = find_sections(lines)
     for name, (begin, end) in sorted(spans.items(), key=lambda item: -item[1][0]):
         if name in sections:
-            lines[begin : end + 1] = [block(name, sections[name])]
+            lines[begin : end + 1] = [block(name, sections[name], eol)]
     text = "".join(lines)
     for name, body in sections.items():
         if name not in spans:
             if text and not text.endswith("\n"):
-                text += "\n"
-            text += ("\n" if text else "") + block(name, body)
+                text += eol
+            text += (eol if text else "") + block(name, body, eol)
     return text
 
 
@@ -84,8 +89,10 @@ def write_atomic(path: Path, text: str) -> None:
     handle, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     temp = Path(temp_name)
     try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="") as stream:
             stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
         if path.exists():
             shutil.copymode(path, temp)
         else:

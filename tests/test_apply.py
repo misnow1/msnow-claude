@@ -52,8 +52,9 @@ AGENTS_SECTIONS = {
 def test_agents_md_has_marked_sections_that_state_each_rule(tmp_path: Path) -> None:
     target = make_empty_repo(tmp_path / "repo")
 
-    run_apply(target)
+    result = run_apply(target)
 
+    assert result.returncode == 0, result.stderr
     text = (target / "AGENTS.md").read_text()
     for name, phrase in AGENTS_SECTIONS.items():
         begin = text.index(f"<!-- bootstrap:begin {name} -->")
@@ -67,8 +68,9 @@ def test_agents_md_has_marked_sections_that_state_each_rule(tmp_path: Path) -> N
 def test_claude_md_imports_agents_md_in_a_marked_section(tmp_path: Path) -> None:
     target = make_empty_repo(tmp_path / "repo")
 
-    run_apply(target)
+    result = run_apply(target)
 
+    assert result.returncode == 0, result.stderr
     text = (target / "CLAUDE.md").read_text()
     begin = text.index("<!-- bootstrap:begin agents-import -->")
     end = text.index("<!-- bootstrap:end agents-import -->")
@@ -149,3 +151,52 @@ def test_fenced_markers_and_unknown_sections_stay_unchanged(tmp_path: Path) -> N
     assert "<!-- bootstrap:begin custom -->\nmine\n" in text
     assert "<!-- bootstrap:begin tdd -->\nexample\n" in text
     assert "Write a failing test first" in text
+
+
+def test_crlf_files_keep_their_line_endings(tmp_path: Path) -> None:
+    target = make_empty_repo(tmp_path / "repo")
+    (target / "AGENTS.md").write_bytes(b"# Mine\r\n\r\nUser text.\r\n")
+
+    result = run_apply(target)
+
+    assert result.returncode == 0, result.stderr
+    data = (target / "AGENTS.md").read_bytes()
+    assert data.startswith(b"# Mine\r\n\r\nUser text.\r\n")
+    assert b"\n" not in data.replace(b"\r\n", b"")
+    assert b"<!-- bootstrap:begin tdd -->\r\n" in data
+
+
+def test_fence_line_with_info_string_does_not_close_a_fence(tmp_path: Path) -> None:
+    target = make_empty_repo(tmp_path / "repo")
+    example = (
+        "```\n```python\n<!-- bootstrap:begin tdd -->\nexample\n<!-- bootstrap:end tdd -->\n```\n"
+    )
+    (target / "AGENTS.md").write_text(example)
+
+    result = run_apply(target)
+
+    assert result.returncode == 0, result.stderr
+    text = (target / "AGENTS.md").read_text()
+    assert text.startswith(example)
+    assert "<!-- bootstrap:begin tdd -->\nexample\n" in text
+
+
+def test_foreign_answers_file_fails_and_is_kept(tmp_path: Path) -> None:
+    target = make_empty_repo(tmp_path / "repo")
+    foreign = "_commit: v1\n_src_path: https://example.com/other-template.git\nname: x\n"
+    (target / ".copier-answers.yml").write_text(foreign)
+
+    result = run_apply(target)
+
+    assert result.returncode != 0
+    assert (target / ".copier-answers.yml").read_text() == foreign
+    assert tree(target) == {".copier-answers.yml"}
+
+
+def test_answers_file_from_this_template_is_accepted(tmp_path: Path) -> None:
+    target = make_empty_repo(tmp_path / "repo")
+    assert run_apply(target).returncode == 0
+
+    result = run_apply(target)
+
+    assert result.returncode == 0, result.stderr
