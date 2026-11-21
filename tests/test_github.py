@@ -340,7 +340,7 @@ def test_a_yaml_merge_key_is_accepted(tmp_path: Path) -> None:
 
 def test_empty_repo_pushes_the_first_commit_before_the_ruleset(tmp_path: Path) -> None:
     target = repo_with_settings(tmp_path / "repo")
-    git(target, "symbolic-ref", "HEAD", "refs/heads/trunk")
+    git(target, "symbolic-ref", "HEAD", "refs/heads/main")
 
     result = run_github(
         target, "--dry-run", "--state", str(state_with(tmp_path, "new-repo.json", empty=True))
@@ -348,7 +348,7 @@ def test_empty_repo_pushes_the_first_commit_before_the_ruleset(tmp_path: Path) -
 
     assert result.returncode == 0, result.stderr
     operations = json.loads(result.stdout)["operations"]
-    assert operations[0] == {"op": "push", "branch": "trunk"}
+    assert operations[0] == {"op": "push", "branch": "main"}
     assert operations[-1] == {"op": "create_ruleset", "ruleset": RULESET}
 
 
@@ -371,7 +371,7 @@ def test_private_repo_on_free_skips_the_ruleset(tmp_path: Path) -> None:
 
 def test_an_empty_private_repo_on_free_still_pushes(tmp_path: Path) -> None:
     target = repo_with_settings(tmp_path / "repo")
-    git(target, "symbolic-ref", "HEAD", "refs/heads/trunk")
+    git(target, "symbolic-ref", "HEAD", "refs/heads/main")
 
     result = run_github(
         target,
@@ -381,7 +381,7 @@ def test_an_empty_private_repo_on_free_still_pushes(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["operations"] == [{"op": "push", "branch": "trunk"}]
+    assert json.loads(result.stdout)["operations"] == [{"op": "push", "branch": "main"}]
 
 
 Change = Callable[[dict[str, Any]], None]

@@ -55,14 +55,16 @@ A private repo on GitHub Free has no rulesets. The plan then skips the ruleset a
 ## Dry run
 
 `bootstrap github TARGET --dry-run --state FILE` prints the plan as JSON and changes nothing.
-This version supports only the dry run, so the command needs `--dry-run` and `--state`.
-The state file is JSON. It replaces the live read of GitHub. These are its keys:
+This version supports only the dry run, so the command needs `--dry-run`.
+Without `--state`, the command reads GitHub through `gh`. See "Read GitHub through gh".
+The state file is JSON. It replaces the read of GitHub through `gh`. These are its keys:
 
 - `repository`: the repo settings, and `default_branch`. The command needs `default_branch` when a ruleset has an exclude pattern other than `~DEFAULT_BRANCH` and `~ALL`.
 - `labels`: the labels of the repo.
-- `empty`: true when the repo has no branch. The plan then starts with a `push` of the current local branch.
+- `empty`: true when the repo has no branch. The plan then starts with a `push` of the current local branch. The key `default_branch` is then required, and the local branch must have that name.
 - `rulesets_available`: false for a private repo on GitHub Free.
 - `rulesets`: the repo rulesets only. Each entry needs the key `source_type`. Read each one with `gh api repos/O/R/rulesets/ID`, because the list endpoint lacks `rules`, `conditions` and `bypass_actors`. A ruleset without those keys is not valid, so the command cannot plan an update that drops your rules.
+- `unreadable_rulesets`: names of repo rulesets that the token cannot read. The plan then skips the ruleset with the reason "needs admin access to read the ruleset".
 
 List the repo rulesets with `gh api "repos/O/R/rulesets?includes_parents=false"`.
 Each object can hold the extra keys that the GitHub API returns. You can paste the output of `gh api repos/O/R` under `repository`.
@@ -70,3 +72,21 @@ The command `gh api repos/O/R/labels` returns 30 labels for each page. Use `--pa
 The command ignores a misspelled key. The field then counts as unknown, so the plan sets it.
 
 The plan has two lists. `operations` holds `push`, `update_repository`, `create_label`, `create_ruleset` and `update_ruleset` operations, in this order: the push comes first, and the ruleset comes last. `skipped` holds the operations that the command cannot run, each with a reason.
+
+## Read GitHub through gh
+
+`bootstrap github TARGET --dry-run` without `--state` reads the real state of the repo through the `gh` CLI. It prints the plan and changes nothing. One line on stderr names the repo: `bootstrap: GitHub repo OWNER/REPO`.
+
+Requirements:
+
+- `gh` 2.48 or later, logged in with admin rights on the repo. Without admin rights, GitHub leaves out some settings, so the command stops.
+- The remote `origin` is on `github.com`.
+
+The command takes the repo from `origin`. It ignores `GH_REPO`, `gh repo set-default` and other remotes, so a fork clone reads its own repo and not the upstream repo. The fetch URL and the push URL of `origin` must name the same repo. Each must be one URL with the scheme https or ssh. The form `git@github.com:O/R` also works. A second `url` or `pushurl` value, an `http://` URL and a `file://` URL stop the command. The command drops a token in a remote URL and never prints it.
+An SSH host alias such as `git@github-work:O/R.git` does not work. Use the https URL, or a `Host github.com` entry in `~/.ssh/config` in place of the alias.
+
+For an empty repo, the local branch must have the name of the default branch that GitHub reports. The first push makes its branch the default branch, and the ruleset then protects it. To rename the branch, run `git branch -m NAME`.
+
+The command reads only repo-level data. It reads rulesets with `includes_parents=false`, so it never reads or plans a ruleset of an organization.
+
+Two cases are not errors. A private repo on GitHub Free has no rulesets, so the plan skips the ruleset. A token can lack the right to edit rulesets. A fine-grained token can be like this. The plan then skips the ruleset that it cannot read, with the reason "needs admin access to read the ruleset". The command then does not try to create a second ruleset with the same name.

@@ -21,6 +21,7 @@ SQUASH_FIELDS = ("squash_merge_commit_title", "squash_merge_commit_message")
 NOT_AVAILABLE = (
     "rulesets are not available for this repo: a private repo needs GitHub Pro, Team or Enterprise"
 )
+NEEDS_ADMIN = "needs admin access to read the ruleset"
 NOT_A_BRANCH_RULESET = "a repo ruleset with this name exists but does not target branches"
 
 
@@ -40,6 +41,8 @@ def ruleset_plan(
 ) -> tuple[list[Operation], list[Skip]]:
     if not current.rulesets_available:
         return [], [Skip(operation="ruleset", reason=NOT_AVAILABLE)]
+    if desired.ruleset.name in current.unreadable_rulesets:
+        return [], [Skip(operation="ruleset", reason=NEEDS_ADMIN)]  # a create would fail with 422
     # An organization ruleset is never a match, so the command changes only repo settings.
     existing = next(
         (

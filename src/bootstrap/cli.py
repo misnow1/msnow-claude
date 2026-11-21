@@ -16,10 +16,13 @@ from copier.errors import CopierError
 from bootstrap import languages, markers
 from bootstrap.errors import BootstrapError
 from bootstrap.github.planner import plan
+from bootstrap.github.push import push_branch
+from bootstrap.github.reader import read_state
+from bootstrap.github.repo import resolve_repo
 from bootstrap.github.settings_file import load_desired, load_state
 from bootstrap.gitutil import (
     check_clean_repo_root,
-    current_branch,
+    check_repo_root,
     ignored_rej_files,
     tracked_paths,
     unmerged_paths,
@@ -298,14 +301,21 @@ def apply(target: Path, template: str, template_version: str | None = None) -> N
         )
 
 
-def github(target: Path, state: Path) -> None:
+def github(target: Path, state: Path | None) -> None:
     """Print the plan of GitHub operations. Nothing changes on GitHub."""
     target = target.resolve()
     if not target.is_dir():
         raise BootstrapError(f"target is not an existing directory: {target}")
     desired = load_desired(target)
-    current = load_state(state)
-    branch = current_branch(target) if current.empty else None
+    if state is None:
+        # In a subdirectory, git would give the remote of the outer repo.
+        check_repo_root(target)
+        repo = resolve_repo(target)
+        print(f"bootstrap: GitHub repo {repo.slug}", file=sys.stderr)
+        current = read_state(target, repo)
+    else:
+        current = load_state(state)
+    branch = push_branch(target, current)
     print(plan(desired, current, branch).model_dump_json(indent=2, exclude_none=True))
 
 
@@ -325,9 +335,11 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         required=True,
-        help="print the plan as JSON and change nothing (the live adapter comes later)",
+        help="print the plan as JSON and change nothing (running the plan comes later)",
     )
-    github_parser.add_argument("--state", type=Path, required=True, help="GitHub state file")
+    github_parser.add_argument(
+        "--state", type=Path, help="GitHub state file; it replaces the read of GitHub through gh"
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "github":

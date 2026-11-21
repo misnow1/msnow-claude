@@ -1,11 +1,13 @@
 """Shared helpers: git with a fixed identity, and a tagged fixture template."""
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -120,7 +122,9 @@ FIXTURES = REPO_ROOT / "tests" / "fixtures" / "github"
 SETTINGS_TEMPLATE = REPO_ROOT / "template" / ".github" / "bootstrap.yml"
 
 
-def run_github(target: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+def run_github(
+    target: Path, *extra: str, env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run `bootstrap github` against a target repo."""
     return subprocess.run(
         [str(BOOTSTRAP), "github", str(target), *extra],
@@ -129,8 +133,79 @@ def run_github(target: Path, *extra: str) -> subprocess.CompletedProcess[str]:
         check=False,
         stdin=subprocess.DEVNULL,
         timeout=60,
-        env={**os.environ, **GIT_ENV},
+        env={**os.environ, **GIT_ENV, **(env or {})},
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def stub_gh(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Put a `gh` that always fails on PATH, so no test reaches the real `gh`."""
+    stub_dir = tmp_path_factory.mktemp("stub-gh")
+    stub = stub_dir / "gh"
+    stub.write_text('#!/bin/sh\necho "stub gh: pass fake_gh.env to run_github" >&2\nexit 99\n')
+    stub.chmod(0o755)
+    os.environ["PATH"] = f"{stub_dir}{os.pathsep}{os.environ['PATH']}"
+
+
+FAKE_GH = REPO_ROOT / "tests" / "fake_gh.py"
+SLUG = "octo/widgets"
+
+
+class FakeGh:
+    """A fake `gh` first on PATH, over a state file. Each call goes to a log."""
+
+    def __init__(self, root: Path) -> None:
+        bin_dir = root / "fake-bin"
+        bin_dir.mkdir()
+        wrapper = bin_dir / "gh"
+        wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_GH}" "$@"\n')
+        wrapper.chmod(0o755)
+        self.state_path = root / "fake-gh-state.json"
+        self.log_path = root / "fake-gh-log.jsonl"
+        self.bin_dir = bin_dir
+        self.install({})
+
+    @property
+    def env(self) -> dict[str, str]:
+        return {
+            "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "GH_FAKE_STATE": str(self.state_path),
+            "GH_FAKE_LOG": str(self.log_path),
+        }
+
+    def install(self, state: Mapping[str, object]) -> None:
+        self.state_path.write_text(json.dumps(state))
+
+    def calls(self) -> list[dict[str, Any]]:
+        if not self.log_path.exists():
+            return []
+        return [json.loads(line) for line in self.log_path.read_text().splitlines()]
+
+
+def fake_state(fixture: Mapping[str, Any], admin: bool = True) -> dict[str, Any]:
+    """The state of the fake GitHub for one of the state fixtures."""
+    repository = fixture["repository"]
+    repo = {"id": 1, "full_name": SLUG, **repository}
+    if admin:
+        repo["permissions"] = {"admin": True, "push": True, "pull": True}
+    branches = [] if fixture.get("empty") else [{"name": repository.get("default_branch", "main")}]
+    return {
+        "slug": SLUG,
+        "repo": repo,
+        "labels": fixture["labels"],
+        "branches": branches,
+        "rulesets": fixture.get("rulesets", []),
+    }
+
+
+@pytest.fixture
+def fake_gh(tmp_path: Path) -> FakeGh:
+    return FakeGh(tmp_path)
+
+
+def add_origin(target: Path, url: str = f"https://github.com/{SLUG}.git") -> Path:
+    git(target, "remote", "add", "origin", url)
+    return target
 
 
 def repo_with_settings(path: Path, text: str | None = None) -> Path:

@@ -142,6 +142,7 @@ class CurrentState(Current):
     empty: bool = False  # the repo has no branches
     rulesets_available: bool = True
     rulesets: list[CurrentRuleset] = []  # repo rulesets only, each from the detail endpoint
+    unreadable_rulesets: list[str] = []  # names of repo rulesets that the caller cannot read
 
 
 class RepositoryChanges(Model):
