@@ -49,6 +49,14 @@ def check_clean_repo_root(target: Path) -> None:
         )
 
 
+def current_branch(target: Path) -> str:
+    """Return the branch that HEAD names. It works in a repo with no commit."""
+    try:
+        return run_git(target, "symbolic-ref", "--short", "HEAD").strip()
+    except BootstrapError as error:
+        raise BootstrapError(f"cannot read the current branch of {target}: {error}") from error
+
+
 def unmerged_paths(target: Path) -> list[str]:
     """Return the paths with an unresolved merge conflict. The -z flag avoids path quoting."""
     out = run_git(target, "diff", "--name-only", "-z", "--diff-filter=U")

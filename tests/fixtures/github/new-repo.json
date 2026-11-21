@@ -6,10 +6,20 @@
     "squash_merge_commit_title": "COMMIT_OR_PR_TITLE",
     "squash_merge_commit_message": "COMMIT_MESSAGES",
     "delete_branch_on_merge": false,
-    "allow_auto_merge": false
+    "allow_auto_merge": false,
+    "default_branch": "main"
   },
   "labels": [
-    {"name": "bug", "color": "d73a4a", "description": "Something isn't working"},
-    {"name": "wontfix", "color": "ffffff", "description": "This will not be worked on"}
-  ]
+    {
+      "name": "bug",
+      "color": "d73a4a",
+      "description": "Something isn't working"
+    },
+    {
+      "name": "wontfix",
+      "color": "ffffff",
+      "description": "This will not be worked on"
+    }
+  ],
+  "rulesets": []
 }

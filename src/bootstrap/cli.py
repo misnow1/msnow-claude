@@ -19,6 +19,7 @@ from bootstrap.github.planner import plan
 from bootstrap.github.settings_file import load_desired, load_state
 from bootstrap.gitutil import (
     check_clean_repo_root,
+    current_branch,
     ignored_rej_files,
     tracked_paths,
     unmerged_paths,
@@ -302,9 +303,10 @@ def github(target: Path, state: Path) -> None:
     target = target.resolve()
     if not target.is_dir():
         raise BootstrapError(f"target is not an existing directory: {target}")
-    print(
-        plan(load_desired(target), load_state(state)).model_dump_json(indent=2, exclude_none=True)
-    )
+    desired = load_desired(target)
+    current = load_state(state)
+    branch = current_branch(target) if current.empty else None
+    print(plan(desired, current, branch).model_dump_json(indent=2, exclude_none=True))
 
 
 def main(argv: list[str] | None = None) -> int:
