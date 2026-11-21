@@ -42,11 +42,17 @@ def read_existing(path: Path) -> str | None:
 
 
 def normalize_source(source: str) -> str:
-    """Return a comparable form of a template source: a resolved path or a trimmed URL."""
+    """Return a comparable form of a template source.
+
+    An existing local path is resolved. A relative path resolves against the current directory,
+    because Copier records the source as typed. A URL loses a trailing slash and `.git`.
+    """
     path = Path(source)
     if path.exists():
         return str(path.resolve())
-    return source.rstrip("/").removesuffix(".git")
+    if "://" in source or source.startswith("git@"):
+        return source.rstrip("/").removesuffix(".git")
+    return source
 
 
 def check_answers_file(path: Path, template: str) -> None:
