@@ -10,3 +10,13 @@ _exclude:
   - ".svn"
   - "AGENTS.md"
   - "CLAUDE.md"
+
+languages:
+  type: yaml
+  multiselect: true
+  choices:
+    - python
+    - go
+    - rust
+  default: []
+  help: Languages of the target repo. The command detects them and never asks.
