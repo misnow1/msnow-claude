@@ -15,6 +15,8 @@ from copier.errors import CopierError
 
 from bootstrap import languages, markers
 from bootstrap.errors import BootstrapError
+from bootstrap.github.planner import plan
+from bootstrap.github.settings_file import load_desired, load_state
 from bootstrap.gitutil import (
     check_clean_repo_root,
     ignored_rej_files,
@@ -295,6 +297,16 @@ def apply(target: Path, template: str, template_version: str | None = None) -> N
         )
 
 
+def github(target: Path, state: Path) -> None:
+    """Print the plan of GitHub operations. Nothing changes on GitHub."""
+    target = target.resolve()
+    if not target.is_dir():
+        raise BootstrapError(f"target is not an existing directory: {target}")
+    print(
+        plan(load_desired(target), load_state(state)).model_dump_json(indent=2, exclude_none=True)
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bootstrap")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -305,9 +317,21 @@ def main(argv: list[str] | None = None) -> int:
         "--template-version",
         help="template version tag; the default is the latest release tag",
     )
+    github_parser = commands.add_parser("github", help="plan the GitHub settings of a repo")
+    github_parser.add_argument("target", type=Path)
+    github_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        required=True,
+        help="print the plan as JSON and change nothing (the live adapter comes later)",
+    )
+    github_parser.add_argument("--state", type=Path, required=True, help="GitHub state file")
     args = parser.parse_args(argv)
     try:
-        apply(args.target, args.template, args.template_version)
+        if args.command == "github":
+            github(args.target, args.state)
+        else:
+            apply(args.target, args.template, args.template_version)
     except (BootstrapError, CopierError, OSError, UnicodeDecodeError) as error:
         print(f"bootstrap: error: {error}", file=sys.stderr)
         return 1
