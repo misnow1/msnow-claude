@@ -1,6 +1,6 @@
 """Models for the GitHub settings: desired state, current state, operations and the plan."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -56,10 +56,33 @@ class Label(Desired):
     description: str
 
 
+class RulesetSettings(Desired):
+    name: str = Field(min_length=1)
+    required_approving_review_count: int = Field(ge=0, le=10)
+    dismiss_stale_reviews_on_push: bool
+    allowed_merge_methods: list[Literal["merge", "squash", "rebase"]] = Field(min_length=1)
+
+    @field_validator("allowed_merge_methods")
+    @classmethod
+    def methods_are_unique(cls, methods: list[str]) -> list[str]:
+        if len(set(methods)) != len(methods):
+            raise ValueError("duplicate merge methods")
+        return methods
+
+
 class DesiredState(Desired):
     repository: RepositorySettings
     labels: list[Label]
-    required_checks: list[str]
+    ruleset: RulesetSettings
+    required_checks: list[Annotated[str, Field(min_length=1)]]
+
+    @field_validator("required_checks")
+    @classmethod
+    def check_names_are_unique(cls, names: list[str]) -> list[str]:
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate check names: {', '.join(duplicates)}")
+        return names
 
     @field_validator("labels")
     @classmethod
@@ -81,6 +104,7 @@ class CurrentRepository(Current):
     squash_merge_commit_message: str | None = None
     delete_branch_on_merge: bool | None = None
     allow_auto_merge: bool | None = None
+    default_branch: str | None = None
 
 
 class CurrentLabel(Current):
@@ -89,9 +113,35 @@ class CurrentLabel(Current):
     description: str | None = None
 
 
+class CurrentRule(Current):
+    type: str
+    parameters: dict[str, Any] | None = None
+
+
+class CurrentRuleset(Current):
+    """A repo ruleset as the detail endpoint returns it.
+
+    The list endpoint lacks `conditions`, `rules` and `bypass_actors`. They have no default, so
+    a state that comes from the list fails to validate. A default would plan an update that
+    removes the rules of the user.
+    """
+
+    id: int
+    name: str
+    source_type: str
+    target: str | None = None
+    enforcement: str | None = None
+    conditions: dict[str, Any] | None
+    rules: list[CurrentRule]
+    bypass_actors: list[dict[str, Any]]
+
+
 class CurrentState(Current):
     repository: CurrentRepository
     labels: list[CurrentLabel]
+    empty: bool = False  # the repo has no branches
+    rulesets_available: bool = True
+    rulesets: list[CurrentRuleset] = []  # repo rulesets only, each from the detail endpoint
 
 
 class RepositoryChanges(Model):
@@ -116,7 +166,37 @@ class CreateLabel(Model):
     label: Label
 
 
-Operation = Annotated[UpdateRepository | CreateLabel, Field(discriminator="op")]
+class Push(Model):
+    op: Literal["push"] = "push"
+    branch: str
+
+
+class RulesetBody(Model):
+    """The body of the GitHub request that creates or replaces a ruleset."""
+
+    name: str
+    target: str
+    enforcement: str
+    conditions: dict[str, Any]
+    rules: list[dict[str, Any]]
+    bypass_actors: list[dict[str, Any]]
+
+
+class CreateRuleset(Model):
+    op: Literal["create_ruleset"] = "create_ruleset"
+    ruleset: RulesetBody
+
+
+class UpdateRuleset(Model):
+    op: Literal["update_ruleset"] = "update_ruleset"
+    id: int
+    ruleset: RulesetBody
+
+
+Operation = Annotated[
+    Push | UpdateRepository | CreateLabel | CreateRuleset | UpdateRuleset,
+    Field(discriminator="op"),
+]
 
 
 class Skip(Model):

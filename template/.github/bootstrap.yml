@@ -24,4 +24,9 @@ labels:
   - name: wontfix
     color: "FFFFFF"
     description: "This will not be worked on"
+ruleset:
+  name: protect-default-branch
+  required_approving_review_count: 0
+  dismiss_stale_reviews_on_push: true
+  allowed_merge_methods: [squash]
 required_checks: []
