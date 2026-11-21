@@ -19,18 +19,23 @@ def run_git(repo: Path, *args: str) -> str:
     return result.stdout
 
 
-def check_clean_repo_root(target: Path) -> None:
-    """Raise BootstrapError unless target is the root of a git repo with no uncommitted change.
-
-    The status call lists untracked files whatever the repo config says. An update can write
-    over an untracked file, and git has no copy of it.
-    """
+def check_repo_root(target: Path) -> None:
+    """Raise BootstrapError unless target is the root of a git repo."""
     try:
         top = run_git(target, "rev-parse", "--show-toplevel").strip()
     except BootstrapError as error:
         raise BootstrapError(f"{target} is not in a git repo. Run `git init` first.") from error
     if Path(top).resolve() != target.resolve():
         raise BootstrapError(f"{target} is not the root of its git repo, which is {top}.")
+
+
+def check_clean_repo_root(target: Path) -> None:
+    """Raise BootstrapError unless target is the root of a git repo with no uncommitted change.
+
+    The status call lists untracked files whatever the repo config says. An update can write
+    over an untracked file, and git has no copy of it.
+    """
+    check_repo_root(target)
     status = run_git(
         target, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"
     )
