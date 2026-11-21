@@ -1,0 +1,3 @@
+# Install the bootstrap skill from a plugin marketplace
+
+This repo is also a Claude Code plugin marketplace. The marketplace holds one plugin, which contains only the bootstrap skill. You install the plugin once on each machine. ADR 0001 still applies, because the standards go into each target repo and not into the plugin. We rejected a script that links the skill into the user skills directory, because each machine then needs a clone of this repo. We rejected running the command with `uvx` and no skill. The skill holds the steps that need judgement, such as conflict merges and the pull request.
