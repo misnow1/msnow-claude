@@ -60,7 +60,8 @@ def ruleset_plan(
     body = wanted_body(desired, existing, default_branch)
     if body == body_of(existing):
         return [], []
-    return [UpdateRuleset(id=existing.id, ruleset=body)], []
+    update = UpdateRuleset(id=existing.id, ruleset=body, expected_updated_at=existing.updated_at)
+    return [update], []
 
 
 def plan(desired: DesiredState, current: CurrentState, branch: str | None = None) -> Plan:

@@ -15,6 +15,8 @@ from copier.errors import CopierError
 
 from bootstrap import languages, markers
 from bootstrap.errors import BootstrapError
+from bootstrap.github.executor import execute
+from bootstrap.github.models import Plan, Push, Report
 from bootstrap.github.planner import plan
 from bootstrap.github.push import push_branch
 from bootstrap.github.reader import read_state
@@ -301,22 +303,35 @@ def apply(target: Path, template: str, template_version: str | None = None) -> N
         )
 
 
-def github(target: Path, state: Path | None) -> None:
-    """Print the plan of GitHub operations. Nothing changes on GitHub."""
+def github(target: Path, dry_run: bool, state: Path | None) -> Plan | Report:
+    """Plan the GitHub operations, and run them unless this is a dry run."""
+    if state is not None and not dry_run:
+        raise BootstrapError(
+            "a state file only works with --dry-run, so a fake state cannot change GitHub"
+        )
     target = target.resolve()
     if not target.is_dir():
         raise BootstrapError(f"target is not an existing directory: {target}")
     desired = load_desired(target)
+    live_repo = None
     if state is None:
         # In a subdirectory, git would give the remote of the outer repo.
         check_repo_root(target)
-        repo = resolve_repo(target)
-        print(f"bootstrap: GitHub repo {repo.slug}", file=sys.stderr)
-        current = read_state(target, repo)
+        live_repo = resolve_repo(target)
+        print(f"bootstrap: GitHub repo {live_repo.slug}", file=sys.stderr)
+        current = read_state(target, live_repo)
     else:
         current = load_state(state)
     branch = push_branch(target, current)
-    print(plan(desired, current, branch).model_dump_json(indent=2, exclude_none=True))
+    result = plan(desired, current, branch)
+    if dry_run or live_repo is None:
+        return result
+    if any(isinstance(operation, Push) for operation in result.operations):
+        raise BootstrapError(
+            "the repo is empty on GitHub, and this version cannot push the first commit yet. "
+            "Push it yourself, then run again."
+        )
+    return execute(target, live_repo, result, desired, current.repository.default_branch)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -334,8 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     github_parser.add_argument(
         "--dry-run",
         action="store_true",
-        required=True,
-        help="print the plan as JSON and change nothing (running the plan comes later)",
+        help="print the plan as JSON and change nothing on GitHub",
     )
     github_parser.add_argument(
         "--state", type=Path, help="GitHub state file; it replaces the read of GitHub through gh"
@@ -343,9 +357,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "github":
-            github(args.target, args.state)
-        else:
-            apply(args.target, args.template, args.template_version)
+            result = github(args.target, args.dry_run, args.state)
+            print(result.model_dump_json(indent=2, exclude_none=True))
+            return 1 if isinstance(result, Report) and result.failed else 0
+        apply(args.target, args.template, args.template_version)
     except (BootstrapError, CopierError, OSError, UnicodeDecodeError) as error:
         print(f"bootstrap: error: {error}", file=sys.stderr)
         return 1

@@ -129,6 +129,7 @@ class CurrentRuleset(Current):
     id: int
     name: str
     source_type: str
+    updated_at: str | None = None
     target: str | None = None
     enforcement: str | None = None
     conditions: dict[str, Any] | None
@@ -192,6 +193,10 @@ class UpdateRuleset(Model):
     op: Literal["update_ruleset"] = "update_ruleset"
     id: int
     ruleset: RulesetBody
+    # `updated_at` of the ruleset when it was read. A PUT replaces the whole ruleset, so the run
+    # checks that nobody changed the ruleset since. None makes the run fail closed. Only a dry-run
+    # state file can lack it.
+    expected_updated_at: str | None = None
 
 
 Operation = Annotated[
@@ -208,3 +213,24 @@ class Skip(Model):
 class Plan(Model):
     operations: list[Operation] = []
     skipped: list[Skip] = []
+
+
+class Result(Model):
+    """What happened to one operation.
+
+    `skipped` is a policy block, or a change that GitHub ignored: a PATCH with no field applied,
+    or a ruleset that GitHub cut down (the ruleset exists, but not as planned).
+    """
+
+    operation: Operation
+    outcome: Literal["applied", "skipped", "failed", "not_run"]
+    reason: str | None = None
+
+
+class Report(Model):
+    results: list[Result] = []
+    plan_skipped: list[Skip] = []  # the skips of the plan, not the outcome `skipped`
+
+    @property
+    def failed(self) -> bool:
+        return any(result.outcome == "failed" for result in self.results)

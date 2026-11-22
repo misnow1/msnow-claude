@@ -181,6 +181,29 @@ class FakeGh:
             return []
         return [json.loads(line) for line in self.log_path.read_text().splitlines()]
 
+    def writes(self) -> list[dict[str, Any]]:
+        return [call for call in self.calls() if call["method"] != "GET"]
+
+    def state(self) -> dict[str, Any]:
+        loaded: dict[str, Any] = json.loads(self.state_path.read_text())
+        return loaded
+
+    def update(self, change: Callable[[dict[str, Any]], None]) -> None:
+        """Change the state between two runs, for example to remove an injected error."""
+        state = self.state()
+        change(state)
+        self.install(state)
+
+    def clear_log(self) -> None:
+        self.log_path.unlink(missing_ok=True)
+
+    def assert_repo_scoped(self) -> None:
+        """Each call is a GET, PATCH, POST or PUT under the repo, and none goes elsewhere."""
+        for call in self.calls():
+            endpoint = call["args"][1].partition("?")[0]
+            assert call["method"] in {"GET", "PATCH", "POST", "PUT"}, call
+            assert endpoint == f"repos/{SLUG}" or endpoint.startswith(f"repos/{SLUG}/"), call
+
 
 def fake_state(fixture: Mapping[str, Any], admin: bool = True) -> dict[str, Any]:
     """The state of the fake GitHub for one of the state fixtures."""
