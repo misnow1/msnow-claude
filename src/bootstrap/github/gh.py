@@ -8,11 +8,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from bootstrap.errors import BootstrapError
 from bootstrap.github.repo import Repo
+from bootstrap.gitutil import env_seconds
 
 DEFAULT_TIMEOUT_SECONDS = 60
-MAX_TIMEOUT_SECONDS = 3600
 WRITE_METHODS = {"PATCH", "POST", "PUT"}
 # These make `gh` print the HTTP exchange, or color its output. The exchange can hold the token.
 DROPPED_ENV = ("GH_DEBUG", "DEBUG", "GODEBUG", "GH_FORCE_TTY", "CLICOLOR_FORCE")
@@ -34,13 +33,7 @@ class GhError(Exception):
 
 def timeout_seconds() -> int:
     """`BOOTSTRAP_GH_TIMEOUT` seconds, 60 by default."""
-    raw = os.environ.get("BOOTSTRAP_GH_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS))
-    if not re.fullmatch(r"[0-9]+", raw) or not 1 <= int(raw) <= MAX_TIMEOUT_SECONDS:
-        raise BootstrapError(
-            "BOOTSTRAP_GH_TIMEOUT must be a whole number of seconds "
-            f"from 1 to {MAX_TIMEOUT_SECONDS}"
-        )
-    return int(raw)
+    return env_seconds("BOOTSTRAP_GH_TIMEOUT", DEFAULT_TIMEOUT_SECONDS)
 
 
 def environment(repo: Repo) -> dict[str, str]:

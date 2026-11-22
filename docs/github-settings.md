@@ -103,7 +103,7 @@ Two cases are not errors. A private repo on GitHub Free has no rulesets, so the 
 | none | GitHub, through `gh` | runs the plan and prints the report |
 
 A state file only works with `--dry-run`. A fake state cannot change GitHub.
-This version cannot push the first commit of an empty repo. If the plan has a `push`, the command stops before any change. Push the commit yourself, then run it again.
+For an empty repo, the plan starts with a `push`. See "The first push".
 
 ### The report
 
@@ -118,6 +118,20 @@ The report has two lists: `results` and `plan_skipped`. `plan_skipped` is the sk
 
 The command stops at the first `failed` result. It still prints the report. The exit code is 1 when a result is `failed`, and 0 otherwise.
 A run after a failure finishes the work. A run after a full success makes no change, and prints an empty report.
+
+### The first push
+
+An empty repo on GitHub has no branch. The plan then starts with a `push` of the local branch, before the settings, the labels and the ruleset. The ruleset comes last, so it cannot block the push.
+
+The command runs `git push` with the explicit refspec `refs/heads/BRANCH:refs/heads/BRANCH`. A `remote.origin.push` setting or `push.default` cannot send the branch to another name. The command also turns off `push.followTags`, `push.recurseSubmodules` and `push.gpgSign` for this push. A tag, a submodule commit or a signature does not go with it. A `pre-push` hook still runs, because the hook is your own rule.
+
+The local branch must have a commit, and its name must be the default branch that GitHub reports. If the local branch has no commit, a live run stops before any change. A dry run prints the plan, and writes a warning on stderr. The spec's dry run makes no commit, so it does not stop.
+After a push that created the branch, the command reads the default branch of the repo again. If someone else pushed a different branch first, GitHub made that branch the default. The result is `failed`, and the ruleset is not created. The reason starts with the commit that the command pushed.
+
+A failed push shows only a redacted reason. The reason comes from the status line of git for the branch. A word that holds a URL or an `@` becomes `<url>`, because a remote URL can hold a token. Git speaks English for this push, so the prefixes of its messages are the same on every machine. A commit that adds a file under `.github/workflows` needs the `workflow` scope for the token. Run `gh auth refresh -s workflow` if GitHub refuses it.
+
+The push has a timeout of 300 seconds. Set `BOOTSTRAP_PUSH_TIMEOUT` to a whole number of seconds from 1 to 3600 to change it. After a timeout, Ctrl-C, SIGTERM or a hangup, the command kills `git` and its helpers. If you run the command with `nohup`, it keeps the hangup ignored. The result is unknown, because GitHub can have the commit already. Run the command again. It finds the branch and does not push it twice.
+A push over SSH needs a key in `ssh-agent` and a known host key. The command cannot answer a question, so the push times out.
 
 ### What counts as a policy block
 
@@ -146,3 +160,4 @@ If GitHub reports a new name for the repo, the command stops before any write, a
 
 Use a scratch repo. Run the command, then run it again. The second report must be empty.
 To check the replace of a ruleset, change the ruleset in the GitHub page of the repo. Turn off the dismissal of stale approvals, add a rule and add a bypass actor. Run the command. Your rule and actor must stay, and the dismissal must be on again. Run the command a third time. The report must be empty.
+To check the first push, make a scratch repo on GitHub with no file. In a local folder, run `git init -b main`, then add the settings file and a file under `.github/workflows`, and commit. Add `origin` with the https URL. Run the command with `--dry-run`. The plan must start with a `push`. Run the command. The first result must be the `push`. Run it again. The report must be empty.
