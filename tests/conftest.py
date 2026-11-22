@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -103,7 +104,9 @@ def run_apply() -> Callable[..., subprocess.CompletedProcess[str]]:
         *extra: str,
         env: Mapping[str, str] | None = None,
         cwd: Path | None = None,
+        unset: tuple[str, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
+        merged = {**os.environ, **GIT_ENV, **(env or {})}
         return subprocess.run(
             [str(BOOTSTRAP), "apply", str(target), "--template", str(template), *extra],
             capture_output=True,
@@ -112,7 +115,7 @@ def run_apply() -> Callable[..., subprocess.CompletedProcess[str]]:
             stdin=subprocess.DEVNULL,
             timeout=120,
             cwd=cwd,
-            env={**os.environ, **GIT_ENV, **(env or {})},
+            env={k: v for k, v in merged.items() if k not in unset},
         )
 
     return run
@@ -217,6 +220,19 @@ class FakeGh:
         state = self.state()
         change(state)
         self.install(state)
+
+    def push_group_gone(self) -> bool:
+        """True when the process group of the fake git push is gone, after a short wait."""
+        pgid = int(self.pid_path.read_text())
+        for _ in range(100):
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:  # on macOS, a group that holds only a zombie
+                pass
+            time.sleep(0.1)
+        return False
 
     def clear_log(self) -> None:
         self.log_path.unlink(missing_ok=True)

@@ -161,3 +161,36 @@ If GitHub reports a new name for the repo, the command stops before any write, a
 Use a scratch repo. Run the command, then run it again. The second report must be empty.
 To check the replace of a ruleset, change the ruleset in the GitHub page of the repo. Turn off the dismissal of stale approvals, add a rule and add a bypass actor. Run the command. Your rule and actor must stay, and the dismissal must be on again. Run the command a third time. The report must be empty.
 To check the first push, make a scratch repo on GitHub with no file. In a local folder, run `git init -b main`, then add the settings file and a file under `.github/workflows`, and commit. Add `origin` with the https URL. Run the command with `--dry-run`. The plan must start with a `push`. Run the command. The first result must be the `push`. Run it again. The report must be empty.
+
+## apply and the GitHub step
+
+`bootstrap apply TARGET` writes the files of the standards. For an empty repo it also makes the first commit and runs the GitHub step. The ADR `docs/adr/0004-apply-runs-github-for-empty-repos.md` gives the reasons.
+
+A repo is empty when its HEAD has no commit.
+
+| Repo | What `apply` does |
+| --- | --- |
+| Empty, with `origin` | Reads GitHub first. Writes the files. Makes one commit with the message `chore: apply the development standards`. Pushes it, and applies the settings. It prints the report. |
+| Empty, no `origin` | Writes the files and makes the commit. It skips the GitHub step and prints a note. |
+| Existing | Writes the files. It makes no commit, and it does not call GitHub. It prints a note. Run `bootstrap github .` after the bootstrap pull request merges. |
+
+With `--dry-run`, `apply` writes no file and makes no commit. It prints JSON with four keys. `files` lists the files that a live run writes. `deleted` lists the files that an update deletes. `ignored` lists the files that git ignores. `plan` holds the GitHub plan. The plan is `null` when there is no GitHub step. A dry run on an existing repo cannot show the conflicts of the merge of an update. A live `apply` can follow a dry run, because the dry run leaves the repo as it was.
+With `--state FILE`, a dry run reads the GitHub state from the file. A state file only works with `--dry-run`. An existing repo ignores it.
+
+`apply` stops before it writes anything in these cases:
+
+- The local repo has no commit, but GitHub already has a branch.
+- The local branch does not have the name of the default branch on GitHub.
+- HEAD has no commit, but the repo has branches. Check out a branch first.
+- Git ignores a file that `apply` writes, for example through a global `.claude/` rule. Change your ignore rules, or add the file by hand. For an existing repo, `apply` warns.
+- `BOOTSTRAP_PUSH_TIMEOUT` is not a whole number of seconds.
+- For an empty repo with `origin`, the settings file of the template is missing or not valid.
+- The `origin` of an empty repo is not on `github.com`, for example GitLab, a local path or an SSH host alias. To use `apply` without GitHub, run it in a repo that has no `origin`, and add `origin` after it.
+
+The commit uses your git identity from the configuration. If git has none, the commit fails, and `apply` does not guess one. Your hooks and your signing run as for any commit.
+
+### If a step fails
+
+- If the push fails, the commit stays. Fix the cause, and run `bootstrap github .`. A second `apply` does not retry the push, because the repo now has a commit.
+- If the commit fails, `apply` leaves the files in the folder and stages them. Fix the cause, run `git commit -m "chore: apply the development standards"`, and then run `bootstrap github .`.
+- If you press Ctrl-C after `apply` began to write, check `git status`. If the files are not committed, run `git commit -m "chore: apply the development standards"`. Then run `bootstrap github .`. Without `origin`, add it first.

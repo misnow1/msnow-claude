@@ -259,3 +259,90 @@ def push(target: Path, branch: str) -> PushResult:
                 ) from None
             raise
     return read_push(out, err, process.returncode, refspec)
+
+
+def git_result(
+    target: Path, *args: str, config: tuple[str, ...] = (), stdin: str | None = None
+) -> "subprocess.CompletedProcess[str]":
+    """Run git with its own `subprocess`, so a failure never puts all of stderr in an error."""
+    command = ["git"]
+    for setting in config:
+        command += ["-c", setting]
+    return subprocess.run(
+        [*command, *args],
+        cwd=target,
+        env=GIT_ENV,
+        capture_output=True,
+        text=True,
+        input=stdin,
+        stdin=None if stdin is not None else subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def last_line(text: str) -> str:
+    """The last non-empty line of git's stderr, redacted, for an error message."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return redact(lines[-1]) if lines else "no reason given"
+
+
+def remote_names(target: Path) -> list[str]:
+    return run_git(target, "remote").split()
+
+
+def has_origin(target: Path) -> bool:
+    return "origin" in remote_names(target)
+
+
+def head_has_commit(target: Path) -> bool:
+    """True when HEAD points to a commit. An unborn branch has none."""
+    return git_result(target, "rev-parse", "--verify", "--quiet", "HEAD").returncode == 0
+
+
+def has_branches(target: Path) -> bool:
+    out = git_result(target, "for-each-ref", "--count=1", "--format=%(refname)", "refs/heads")
+    return bool(out.stdout.strip())
+
+
+def ignored_paths(target: Path, paths: list[str]) -> list[str]:
+    """The paths that git ignores. Exit 0 means some are ignored, and exit 1 means none are."""
+    if not paths:
+        return []
+    result = git_result(target, "check-ignore", "-z", "--stdin", stdin="\0".join(paths) + "\0")
+    if result.returncode not in (0, 1):
+        raise BootstrapError(f"git check-ignore failed: {last_line(result.stderr)}")
+    return sorted(path for path in result.stdout.split("\0") if path)
+
+
+COMMIT_MESSAGE = "chore: apply the development standards"
+RECOVERY = f'Fix the cause, run `git commit -m "{COMMIT_MESSAGE}"`, then run `bootstrap github .`.'
+
+
+def commit_written(target: Path, paths: list[str], message: str) -> bool:
+    """Commit the files that `apply` wrote, and nothing else. Return False when nothing changed.
+
+    The files are named, because `git add -A` would leave out a file that a global ignore hides,
+    without a word. `--config useConfigOnly` refuses the identity that git guesses from the user
+    and host name of the machine, which must not go into a first commit that is then pushed.
+    """
+    existing = [path for path in paths if (target / path).exists()]
+    # A file that the template's own `.gitignore` hides is not for the commit. A file that an
+    # older rule hides was refused before apply wrote anything.
+    hidden = set(ignored_paths(target, existing))
+    # Literal: git reads a name such as `:magic.txt` or `a[b].txt` as a pathspec otherwise.
+    stage = [path for path in existing if path not in hidden]
+    added = git_result(target, "--literal-pathspecs", "add", "--", *stage)
+    if added.returncode != 0:
+        raise BootstrapError(f"git add failed: {last_line(added.stderr)}. {RECOVERY}")
+    left = git_result(target, "ls-files", "--others", "--exclude-standard", "-z").stdout
+    leftovers = [path for path in left.split("\0") if path]
+    if leftovers:
+        raise BootstrapError(
+            "apply wrote files that it did not stage: " + ", ".join(leftovers) + ". " + RECOVERY
+        )
+    if git_result(target, "diff", "--cached", "--quiet").returncode == 0:
+        return False
+    done = git_result(target, "commit", "-m", message, config=("user.useConfigOnly=true",))
+    if done.returncode != 0:
+        raise BootstrapError(f"git commit failed: {last_line(done.stderr)}. {RECOVERY}")
+    return True

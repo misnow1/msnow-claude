@@ -1,6 +1,7 @@
 """The `bootstrap` command."""
 
 import argparse
+import json
 import re
 import signal
 import sys
@@ -9,6 +10,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 import copier
@@ -23,11 +25,22 @@ from bootstrap.github.planner import plan
 from bootstrap.github.push import push_branch
 from bootstrap.github.reader import read_state
 from bootstrap.github.repo import Repo, resolve_repo
-from bootstrap.github.settings_file import load_desired, load_state
+from bootstrap.github.settings_file import (
+    SETTINGS_PATH,
+    load_desired,
+    load_state,
+    parse_desired,
+)
 from bootstrap.gitutil import (
+    COMMIT_MESSAGE,
     check_clean_repo_root,
     check_repo_root,
+    commit_written,
+    has_branches,
     has_commit,
+    has_origin,
+    head_has_commit,
+    ignored_paths,
     ignored_rej_files,
     push_timeout,
     tracked_paths,
@@ -200,8 +213,10 @@ def check_template_clashes(
     version: str,
     found: list[str],
     stored: dict[str, object] | None,
-) -> None:
+) -> tuple[Render, list[Path]]:
     """Raise BootstrapError when a run would lose a file that git cannot restore.
+
+    Return the render of the new version and the paths that an update deletes.
 
     The worktree is clean, so a file that exists in target and is not tracked is ignored, and
     git has no copy of it. An update writes every file of the new version over the target. It
@@ -214,6 +229,7 @@ def check_template_clashes(
     replaces the file, and #16 adds the merge for these conflicts.
     """
     new = render_files(source, version, answers_data(stored, found), target.name)
+    deleted: list[Path] = []
     if stored is None:
         clash = sorted(
             path for path in new.files if path not in new.skipped and (target / path).exists()
@@ -224,6 +240,7 @@ def check_template_clashes(
     else:
         old_data = answers_data(stored, languages.saved(stored))
         old = render_files(source, str(stored["_commit"]), old_data, target.name)
+        deleted = sorted(p for p in set(old.files) - set(new.files) if (target / p).exists())
         rej = ignored_rej_files(target)
         if rej:
             raise BootstrapError(
@@ -251,60 +268,7 @@ def check_template_clashes(
         )
     if clash:
         raise BootstrapError(f"{problem}:\n  " + "\n  ".join(str(path) for path in clash))
-
-
-def apply(target: Path, template: str, template_version: str | None = None) -> None:
-    target = target.resolve()
-    if not target.is_dir():
-        raise BootstrapError(f"target is not an existing directory: {target}")
-    check_clean_repo_root(target)
-    existing = {name: read_existing(target / name) for name in AGENT_FILES}
-    stored = check_answers_file(target / ".copier-answers.yml", template)
-    if stored is not None and not isinstance(stored.get("_commit"), str):
-        raise BootstrapError(
-            ".copier-answers.yml has no _commit, so Copier cannot update from it. "
-            "Restore the file from git history. To start over, remove the files that the "
-            "template wrote, and the answers file, and run again."
-        )
-    # A language that was saved once stays, because an update deletes the files of a dropped one.
-    found = sorted(set(languages.detect(target)) | set(languages.saved(stored)))
-    # A rerun reuses the stored string, so another spelling does not rewrite the answers file.
-    source = str(stored["_src_path"]) if stored else resolve_local_path(template)
-    if re.match(r"^(gh|gl):", source):
-        raise BootstrapError(f"{source} is a Copier shortcut. Pass a full git URL or a local path.")
-    version = resolve_version(source, template_version)
-    check_template_clashes(target, source, version, found, stored)
-    with copier_errors():
-        worker = copier.Worker(
-            src_path=source,
-            dst_path=target,
-            vcs_ref=version,
-            data={"languages": found},
-            defaults=True,
-            quiet=True,
-            overwrite=stored is not None,
-        )
-    with worker:
-        with copier_errors():
-            sections_dir = worker.template.local_abspath / "sections"
-        # Read every section before Copier writes, so a missing file leaves no half update.
-        texts = {
-            filename: markers.render(existing[filename], read_sections(sections_dir, folder, names))
-            for filename, (folder, names) in AGENT_FILES.items()
-        }
-        with copier_errors():
-            if stored is None:
-                worker.run_copy()
-            else:
-                worker.run_update()
-        for filename, text in texts.items():
-            markers.write_atomic(target / filename, text)
-    conflicts = unmerged_paths(target)
-    if conflicts:
-        raise BootstrapError(
-            "the update left merge conflicts. Resolve them, then commit:\n  "
-            + "\n  ".join(conflicts)
-        )
+    return new, deleted
 
 
 @dataclass(frozen=True)
@@ -373,13 +337,254 @@ def run(
 def github(target: Path, dry_run: bool, state: Path | None) -> Plan | Report:
     """Plan the GitHub operations, and run them unless this is a dry run."""
     if state is not None and not dry_run:
-        raise BootstrapError(
-            "a state file only works with --dry-run, so a fake state cannot change GitHub"
-        )
+        raise BootstrapError(STATE_NEEDS_DRY_RUN)
     target = resolve_target(target)
     desired = load_desired(target)  # a bad settings file fails before any call to gh
     pre = preflight(target, state)
     return run(desired, pre, make_plan(desired, pre), dry_run)
+
+
+STATE_NEEDS_DRY_RUN = "a state file only works with --dry-run, so a fake state cannot change GitHub"
+NOTE_EXISTING = (
+    "bootstrap: existing repo: the GitHub step is skipped. If GitHub has no branch yet, commit the "
+    "bootstrap files on your branch, then run `bootstrap github .`, which pushes the branch "
+    "itself. Otherwise, merge the bootstrap pull request, then run `bootstrap github .`."
+)
+NOTE_NO_ORIGIN = (
+    "bootstrap: no origin remote: the GitHub step is skipped. "
+    "Add origin, then run `bootstrap github .`."
+)
+
+
+def repo_is_empty(target: Path) -> bool:
+    """True when HEAD has no commit. A repo with branches and an unborn HEAD is an error."""
+    if head_has_commit(target):
+        return False
+    if has_branches(target):
+        raise BootstrapError(
+            "HEAD has no commit, but the repo has branches. Check out a branch first."
+        )
+    return True
+
+
+def github_preflight(
+    target: Path, state: Path | None, empty: bool, dry_run: bool
+) -> Preflight | None:
+    """Read GitHub (or the state file) before apply writes anything. None: no GitHub step."""
+    if not empty or (state is None and not has_origin(target)):
+        return None
+    pre = preflight(target, state)
+    if not pre.current.empty:
+        raise BootstrapError(
+            "the local repo has no commit, but GitHub already has a branch. "
+            "Clone the GitHub repo, and run `bootstrap apply` in the clone."
+        )
+    if not dry_run:
+        push_timeout()  # a bad value stops the command before the first write
+    return pre
+
+
+def written_paths(target: Path, render: Render) -> list[str]:
+    """The files that apply writes. Copier does not write a `_skip_if_exists` file that exists."""
+    paths = {str(p) for p in render.files if not (p in render.skipped and (target / p).exists())}
+    return sorted(paths | {str(ANSWERS_FILE), *AGENT_FILES})
+
+
+def check_ignored(target: Path, written: list[str], empty: bool) -> list[str]:
+    """Stop for an empty repo, which commits these files. Warn for an existing repo."""
+    ignored = ignored_paths(target, written)
+    if ignored and empty:
+        raise BootstrapError(
+            "git ignores these files that apply writes: "
+            + ", ".join(ignored)
+            + ". Change your ignore rules, or add the files by hand."
+        )
+    if ignored:
+        print(
+            "bootstrap: warning: git ignores these files that apply writes, so a commit of "
+            "the bootstrap changes will leave them out: " + ", ".join(ignored),
+            file=sys.stderr,
+        )
+    return ignored
+
+
+def agent_texts(worker: copier.Worker, existing: dict[str, str | None]) -> dict[str, str]:
+    """The text of each agent file, with the sections of the template."""
+    with copier_errors():
+        sections_dir = worker.template.local_abspath / "sections"
+    # Read every section before Copier writes, so a missing file leaves no half update.
+    return {
+        filename: markers.render(existing[filename], read_sections(sections_dir, folder, names))
+        for filename, (folder, names) in AGENT_FILES.items()
+    }
+
+
+def interrupt_hint(empty: bool, pre: Preflight | None) -> str:
+    """How to finish the work when Ctrl-C comes after apply began to write."""
+    if not empty:
+        return "bootstrap: interrupted. The files may be partly written. Check `git status`."
+    then = (
+        "Then run `bootstrap github .`."
+        if pre is not None
+        else ("Then add origin, and run `bootstrap github .`.")
+    )
+    return (
+        "bootstrap: interrupted. Check `git status`. If the files are not committed, run "
+        f'`git commit -m "{COMMIT_MESSAGE}"`. {then}'
+    )
+
+
+@contextmanager
+def interrupt_note(hint: str | None) -> Iterator[None]:
+    """Print the hint when Ctrl-C comes while apply writes. A dry run has no hint."""
+    try:
+        yield
+    except KeyboardInterrupt:
+        if hint:
+            print(hint, file=sys.stderr)
+        raise
+
+
+def write_files(
+    worker: copier.Worker,
+    existing: dict[str, str | None],
+    stored: dict[str, object] | None,
+    target: Path,
+    dry_run: bool,
+) -> None:
+    """Write the files. A dry run reads every input that a live run reads, and writes nothing."""
+    with worker:
+        texts = agent_texts(worker, existing)
+        if dry_run:
+            return
+        with copier_errors():
+            if stored is None:
+                worker.run_copy()
+            else:
+                worker.run_update()
+        for filename, text in texts.items():
+            markers.write_atomic(target / filename, text)
+    conflicts = unmerged_paths(target)
+    if conflicts:
+        raise BootstrapError(
+            "the update left merge conflicts. Resolve them, then commit:\n  "
+            + "\n  ".join(conflicts)
+        )
+
+
+def settings_of(render: Render) -> DesiredState:
+    """The GitHub settings in the render. A live run checks them before it writes anything."""
+    text = render.files.get(SETTINGS_PATH)
+    if text is None:
+        raise BootstrapError(f"the template has no {SETTINGS_PATH}")
+    return parse_desired(text.decode("utf-8"), str(SETTINGS_PATH))
+
+
+def preview(
+    render: Render,
+    deleted: list[Path],
+    pre: Preflight | None,
+    written: list[str],
+    ignored: list[str],
+) -> dict[str, Any]:
+    """The output of a dry run: the files, and the GitHub plan when there is one."""
+    plan_json: Any = None
+    if pre is not None:
+        plan_json = json.loads(
+            make_plan(settings_of(render), pre).model_dump_json(exclude_none=True)
+        )
+    return {
+        "files": written,
+        "deleted": sorted(str(path) for path in deleted),
+        "ignored": ignored,
+        "plan": plan_json,
+    }
+
+
+def finish_apply(
+    target: Path, pre: Preflight | None, desired: DesiredState | None, written: list[str]
+) -> Report | None:
+    """Make the first commit, then run the GitHub step when there is one."""
+    commit_written(target, written, COMMIT_MESSAGE)
+    if pre is None or desired is None:
+        print(NOTE_NO_ORIGIN, file=sys.stderr)
+        return None
+    result = run(desired, pre, make_plan(desired, pre), dry_run=False, warn_no_commit=False)
+    return result if isinstance(result, Report) else None
+
+
+def apply_inputs(
+    target: Path, template: str, template_version: str | None
+) -> tuple[dict[str, str | None], dict[str, object] | None, str, str, list[str]]:
+    """Check the agent files, the answers file and the template. Return what the run needs."""
+    existing = {name: read_existing(target / name) for name in AGENT_FILES}
+    stored = check_answers_file(target / ".copier-answers.yml", template)
+    if stored is not None and not isinstance(stored.get("_commit"), str):
+        raise BootstrapError(
+            ".copier-answers.yml has no _commit, so Copier cannot update from it. "
+            "Restore the file from git history. To start over, remove the files that the "
+            "template wrote, and the answers file, and run again."
+        )
+    # A language that was saved once stays, because an update deletes the files of a dropped one.
+    found = sorted(set(languages.detect(target)) | set(languages.saved(stored)))
+    # A rerun reuses the stored string, so another spelling does not rewrite the answers file.
+    source = str(stored["_src_path"]) if stored else resolve_local_path(template)
+    if re.match(r"^(gh|gl):", source):
+        raise BootstrapError(f"{source} is a Copier shortcut. Pass a full git URL or a local path.")
+    return existing, stored, source, resolve_version(source, template_version), found
+
+
+def apply(
+    target: Path,
+    template: str,
+    template_version: str | None = None,
+    dry_run: bool = False,
+    state: Path | None = None,
+) -> dict[str, Any] | Report | None:
+    """Write the standards. An empty repo also gets the first commit and the GitHub step."""
+    if state is not None and not dry_run:
+        raise BootstrapError(STATE_NEEDS_DRY_RUN)
+    target = resolve_target(target)
+    check_clean_repo_root(target)
+    empty = repo_is_empty(target)
+    existing, stored, source, version, found = apply_inputs(target, template, template_version)
+    pre = github_preflight(target, state, empty, dry_run)  # before any write
+    render, deleted = check_template_clashes(target, source, version, found, stored)
+    written = written_paths(target, render)
+    ignored = check_ignored(target, written, empty)
+    with copier_errors():
+        worker = copier.Worker(
+            src_path=source,
+            dst_path=target,
+            vcs_ref=version,
+            data={"languages": found},
+            defaults=True,
+            quiet=True,
+            overwrite=stored is not None,
+        )
+    desired = settings_of(render) if pre is not None else None  # before any write
+    hint = interrupt_hint(empty, pre)
+    with interrupt_note(hint if not dry_run else None):
+        write_files(worker, existing, stored, target, dry_run)
+    if dry_run:
+        if pre is None:
+            print(NOTE_EXISTING if not empty else NOTE_NO_ORIGIN, file=sys.stderr)
+        return preview(render, deleted, pre, written, ignored)
+    if not empty:
+        print(NOTE_EXISTING, file=sys.stderr)
+        return None
+    with interrupt_note(hint):
+        return finish_apply(target, pre, desired, written)
+
+
+def print_apply(outcome: dict[str, Any] | Report | None) -> int:
+    """Print what `apply` returned. The exit code is 1 for a failed GitHub step."""
+    if isinstance(outcome, dict):
+        print(json.dumps(outcome, indent=2))
+    elif outcome is not None:
+        print(outcome.model_dump_json(indent=2, exclude_none=True))
+        return 1 if outcome.failed else 0
+    return 0
 
 
 def interrupted(signum: int, frame: object) -> None:
@@ -395,6 +600,14 @@ def main(argv: list[str] | None = None) -> int:
     apply_parser.add_argument(
         "--template-version",
         help="template version tag; the default is the latest release tag",
+    )
+    apply_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="write no file and make no commit; print the files and the GitHub plan",
+    )
+    apply_parser.add_argument(
+        "--state", type=Path, help="GitHub state file; it replaces the read of GitHub through gh"
     )
     github_parser = commands.add_parser("github", help="plan the GitHub settings of a repo")
     github_parser.add_argument("target", type=Path)
@@ -420,14 +633,18 @@ def main(argv: list[str] | None = None) -> int:
             result = github(args.target, args.dry_run, args.state)
             print(result.model_dump_json(indent=2, exclude_none=True))
             return 1 if isinstance(result, Report) and result.failed else 0
-        apply(args.target, args.template, args.template_version)
+        return print_apply(
+            apply(args.target, args.template, args.template_version, args.dry_run, args.state)
+        )
     except (BootstrapError, CopierError, OSError, UnicodeDecodeError) as error:
         print(f"bootstrap: error: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         # The `github` command can have changed GitHub, for example with a push.
         changed = " A change on GitHub, such as a push, may have happened." if github_run else ""
-        print(f"bootstrap: interrupted.{changed} Run again to converge.", file=sys.stderr)
+        message = f"bootstrap: interrupted.{changed} Run again to converge."
+        # `apply` has printed its own recovery steps, when it had begun to write.
+        print("bootstrap: interrupted." if args.command == "apply" else message, file=sys.stderr)
         return 130
     return 0
 

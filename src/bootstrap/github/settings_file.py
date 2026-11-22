@@ -56,6 +56,17 @@ def check_not_symlinked(target: Path) -> Path:
     return path
 
 
+def parse_desired(text: str, name: str) -> DesiredState:
+    """Parse and check the text of a settings file."""
+    try:
+        data = yaml.load(text, Loader=UniqueKeyLoader)
+    except yaml.YAMLError as error:
+        raise BootstrapError(f"{name} is not valid YAML: {error}") from error
+    if data is None:
+        raise BootstrapError(f"{name} is empty.")
+    return validate(DesiredState, data, name)
+
+
 def load_desired(target: Path) -> DesiredState:
     """Read the desired state from the GitHub settings file in the target repo."""
     path = check_not_symlinked(target)
@@ -64,14 +75,10 @@ def load_desired(target: Path) -> DesiredState:
             f"{SETTINGS_PATH} is missing in {target}. Run `bootstrap apply` first."
         )
     try:
-        data = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
+        text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
         raise BootstrapError(f"{SETTINGS_PATH} is not valid UTF-8: {error}") from error
-    except yaml.YAMLError as error:
-        raise BootstrapError(f"{SETTINGS_PATH} is not valid YAML: {error}") from error
-    if data is None:
-        raise BootstrapError(f"{SETTINGS_PATH} is empty.")
-    return validate(DesiredState, data, str(SETTINGS_PATH))
+    return parse_desired(text, str(SETTINGS_PATH))
 
 
 def load_state(path: Path) -> CurrentState:

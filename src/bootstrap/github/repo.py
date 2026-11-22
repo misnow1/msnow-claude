@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from bootstrap.errors import BootstrapError
-from bootstrap.gitutil import run_git
+from bootstrap.gitutil import remote_names, run_git
 
 HOST = "github.com"
 OWNER = re.compile(r"[A-Za-z0-9-]+")
@@ -68,8 +68,7 @@ def parse_remote(url: str) -> Repo:
 def remote_url(target: Path, *flags: str) -> str:
     """The one URL of origin. A second URL is a second place that `git push` reaches."""
     try:
-        names = run_git(target, "remote").split()
-        if "origin" not in names:
+        if "origin" not in remote_names(target):
             raise BootstrapError("the repo has no origin remote, so the GitHub repo is unknown")
         out = run_git(target, "remote", "get-url", "--all", *flags, "origin")
     except BootstrapError as error:
