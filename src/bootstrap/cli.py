@@ -2,10 +2,12 @@
 
 import argparse
 import re
+import signal
 import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -16,16 +18,18 @@ from copier.errors import CopierError
 from bootstrap import languages, markers
 from bootstrap.errors import BootstrapError
 from bootstrap.github.executor import execute
-from bootstrap.github.models import Plan, Push, Report
+from bootstrap.github.models import CurrentState, DesiredState, Plan, Push, Report
 from bootstrap.github.planner import plan
 from bootstrap.github.push import push_branch
 from bootstrap.github.reader import read_state
-from bootstrap.github.repo import resolve_repo
+from bootstrap.github.repo import Repo, resolve_repo
 from bootstrap.github.settings_file import load_desired, load_state
 from bootstrap.gitutil import (
     check_clean_repo_root,
     check_repo_root,
+    has_commit,
     ignored_rej_files,
+    push_timeout,
     tracked_paths,
     unmerged_paths,
 )
@@ -303,35 +307,83 @@ def apply(target: Path, template: str, template_version: str | None = None) -> N
         )
 
 
+@dataclass(frozen=True)
+class Preflight:
+    """What a run needs before it plans: the target, the repo (None for a state file) and state."""
+
+    target: Path
+    repo: Repo | None
+    current: CurrentState
+    branch: str | None  # the local branch to push, for an empty repo
+
+
+def resolve_target(target: Path) -> Path:
+    target = target.resolve()
+    if not target.is_dir():
+        raise BootstrapError(f"target is not an existing directory: {target}")
+    return target
+
+
+def preflight(target: Path, state: Path | None) -> Preflight:
+    """Read the state and check the branch. It needs no settings, so `apply` can run it first."""
+    target = resolve_target(target)
+    repo = None
+    if state is None:
+        # In a subdirectory, git would give the remote of the outer repo.
+        check_repo_root(target)
+        repo = resolve_repo(target)
+        print(f"bootstrap: GitHub repo {repo.slug}", file=sys.stderr)
+        current = read_state(target, repo)
+    else:
+        current = load_state(state)
+    return Preflight(target, repo, current, push_branch(target, current))
+
+
+def make_plan(desired: DesiredState, pre: Preflight) -> Plan:
+    return plan(desired, pre.current, pre.branch)
+
+
+def run(
+    desired: DesiredState,
+    pre: Preflight,
+    result: Plan,
+    dry_run: bool,
+    warn_no_commit: bool = True,
+) -> Plan | Report:
+    """Return the plan for a dry run, or run it. The commit check is only for a live run."""
+    pushing = pre.branch is not None and any(isinstance(op, Push) for op in result.operations)
+    no_commit = pushing and pre.branch is not None and not has_commit(pre.target, pre.branch)
+    if dry_run or pre.repo is None:
+        # The spec's dry run makes no commit, so a missing commit is a warning here.
+        if no_commit and warn_no_commit:
+            print(
+                "bootstrap: warning: the local branch has no commit yet; a live run needs one",
+                file=sys.stderr,
+            )
+        return result
+    if no_commit:
+        raise BootstrapError(
+            "the local branch has no commit, so there is nothing to push. Commit first."
+        )
+    if pushing:
+        push_timeout()  # a bad value stops the command before the first write
+    return execute(pre.target, pre.repo, result, desired, pre.current.repository.default_branch)
+
+
 def github(target: Path, dry_run: bool, state: Path | None) -> Plan | Report:
     """Plan the GitHub operations, and run them unless this is a dry run."""
     if state is not None and not dry_run:
         raise BootstrapError(
             "a state file only works with --dry-run, so a fake state cannot change GitHub"
         )
-    target = target.resolve()
-    if not target.is_dir():
-        raise BootstrapError(f"target is not an existing directory: {target}")
-    desired = load_desired(target)
-    live_repo = None
-    if state is None:
-        # In a subdirectory, git would give the remote of the outer repo.
-        check_repo_root(target)
-        live_repo = resolve_repo(target)
-        print(f"bootstrap: GitHub repo {live_repo.slug}", file=sys.stderr)
-        current = read_state(target, live_repo)
-    else:
-        current = load_state(state)
-    branch = push_branch(target, current)
-    result = plan(desired, current, branch)
-    if dry_run or live_repo is None:
-        return result
-    if any(isinstance(operation, Push) for operation in result.operations):
-        raise BootstrapError(
-            "the repo is empty on GitHub, and this version cannot push the first commit yet. "
-            "Push it yourself, then run again."
-        )
-    return execute(target, live_repo, result, desired, current.repository.default_branch)
+    target = resolve_target(target)
+    desired = load_desired(target)  # a bad settings file fails before any call to gh
+    pre = preflight(target, state)
+    return run(desired, pre, make_plan(desired, pre), dry_run)
+
+
+def interrupted(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -355,6 +407,14 @@ def main(argv: list[str] | None = None) -> int:
         "--state", type=Path, help="GitHub state file; it replaces the read of GitHub through gh"
     )
     args = parser.parse_args(argv)
+    github_run = args.command == "github" and not args.dry_run
+    # A hangup or a SIGTERM would kill Python without cleanup, and a push would go on. Treat
+    # them as an interrupt, so the code that runs git can kill git and its helpers first.
+    for name in ("SIGTERM", "SIGHUP"):
+        number = getattr(signal, name)
+        # Keep a signal that the user ignored, for example with `nohup`.
+        if signal.getsignal(number) is signal.SIG_DFL:
+            signal.signal(number, interrupted)
     try:
         if args.command == "github":
             result = github(args.target, args.dry_run, args.state)
@@ -364,6 +424,11 @@ def main(argv: list[str] | None = None) -> int:
     except (BootstrapError, CopierError, OSError, UnicodeDecodeError) as error:
         print(f"bootstrap: error: {error}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        # The `github` command can have changed GitHub, for example with a push.
+        changed = " A change on GitHub, such as a push, may have happened." if github_run else ""
+        print(f"bootstrap: interrupted.{changed} Run again to converge.", file=sys.stderr)
+        return 130
     return 0
 
 

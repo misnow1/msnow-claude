@@ -148,6 +148,7 @@ def stub_gh(tmp_path_factory: pytest.TempPathFactory) -> None:
 
 
 FAKE_GH = REPO_ROOT / "tests" / "fake_gh.py"
+FAKE_GIT = REPO_ROOT / "tests" / "fake_git.py"
 SLUG = "octo/widgets"
 
 
@@ -160,8 +161,15 @@ class FakeGh:
         wrapper = bin_dir / "gh"
         wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_GH}" "$@"\n')
         wrapper.chmod(0o755)
+        git_wrapper = bin_dir / "git"
+        git_wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_GIT}" "$@"\n')
+        git_wrapper.chmod(0o755)
+        self.root = root
         self.state_path = root / "fake-gh-state.json"
         self.log_path = root / "fake-gh-log.jsonl"
+        self.git_log_path = root / "fake-git-log.jsonl"
+        self.pid_path = root / "fake-git.pid"
+        self.real_git = shutil.which("git") or "git"
         self.bin_dir = bin_dir
         self.install({})
 
@@ -171,6 +179,9 @@ class FakeGh:
             "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}",
             "GH_FAKE_STATE": str(self.state_path),
             "GH_FAKE_LOG": str(self.log_path),
+            "GH_FAKE_GIT_LOG": str(self.git_log_path),
+            "GH_FAKE_PID_FILE": str(self.pid_path),
+            "GH_FAKE_REAL_GIT": self.real_git,
         }
 
     def install(self, state: Mapping[str, object]) -> None:
@@ -180,6 +191,19 @@ class FakeGh:
         if not self.log_path.exists():
             return []
         return [json.loads(line) for line in self.log_path.read_text().splitlines()]
+
+    def git_calls(self) -> list[dict[str, Any]]:
+        """The pushes that the fake git saw."""
+        if not self.git_log_path.exists():
+            return []
+        return [json.loads(line) for line in self.git_log_path.read_text().splitlines()]
+
+    def bare(self, name: str = "origin.git") -> Path:
+        """A local bare repo that the fake git pushes to. The fake gh lists its branches."""
+        path = self.root / name
+        git(self.root, "init", "-q", "--bare", "-b", "main", str(path))
+        self.update(lambda state: state.update(bare=str(path)))
+        return path
 
     def writes(self) -> list[dict[str, Any]]:
         return [call for call in self.calls() if call["method"] != "GET"]
@@ -196,6 +220,7 @@ class FakeGh:
 
     def clear_log(self) -> None:
         self.log_path.unlink(missing_ok=True)
+        self.git_log_path.unlink(missing_ok=True)
 
     def assert_repo_scoped(self) -> None:
         """Each call is a GET, PATCH, POST or PUT under the repo, and none goes elsewhere."""

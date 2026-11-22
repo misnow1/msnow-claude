@@ -7,6 +7,9 @@ environment variables that choose the repo and the host.
 
 State keys: `slug` (the one repo that exists), `repo` (the repo object), `labels`, `branches`,
 `rulesets` (full detail objects), `org_rulesets` (detail objects that an organization owns).
+With `bare` (a local bare repo that the fake `git` pushes to), the branches are the branches of
+that repo, and `default_after_first_push` is the default branch that the repo reports once it
+has a branch.
 Switches: `errors` (`"METHOD path"`, or `"path"` for a GET, to status and message), `override`
 (path to any JSON), `branches_409`, `hide_bypass`, `old_gh`, `garbage`, `plain_error`,
 `leak_org`, `ignore_fields` (a PATCH leaves these fields alone), `drop_on_write` (a rule type
@@ -22,6 +25,7 @@ import copy
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from typing import Any, NoReturn
@@ -92,15 +96,38 @@ def split_repo_path(state: dict[str, Any], path: str, paginate: bool = False) ->
 def answer(state: dict[str, Any], path: str, query: str, paginate: bool, slurp: bool) -> Any:
     rest = split_repo_path(state, path, paginate)
     if rest is None and not query:
-        return state["repo"]
+        return repo_object(state)
     if rest == "labels" and query == "per_page=100" and paginate and slurp:
         labels = state["labels"]
         return [labels[i : i + 100] for i in range(0, len(labels), 100)] or [[]]
     if rest == "branches" and query == "per_page=1" and not paginate:
         if state.get("branches_409"):
             fail(409, "Git Repository is empty.", paginate)
-        return state["branches"][:1]
+        return branches(state)[:1]
     return answer_rulesets(state, rest or "", query, paginate, slurp)
+
+
+def branches(state: dict[str, Any]) -> list[dict[str, str]]:
+    """The branches of the bare repo when the state has one, else the listed branches."""
+    bare = state.get("bare")
+    if not bare:
+        found: list[dict[str, str]] = state["branches"]
+        return found
+    command = [os.environ["GH_FAKE_REAL_GIT"], "--git-dir", bare, "for-each-ref"]
+    out = subprocess.run(
+        [*command, "--format=%(refname:short)", "refs/heads"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return [{"name": name} for name in out.split()]
+
+
+def repo_object(state: dict[str, Any]) -> dict[str, Any]:
+    repo: dict[str, Any] = copy.deepcopy(state["repo"])
+    if state.get("default_after_first_push") and branches(state):
+        repo["default_branch"] = state["default_after_first_push"]  # someone else pushed first
+    return repo
 
 
 def answer_rulesets(

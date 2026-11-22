@@ -15,7 +15,7 @@ from conftest import FIXTURES, FakeGh, add_origin, fake_state, git, repo_with_se
 
 from bootstrap.github.executor import execute
 from bootstrap.github.gh import check_write
-from bootstrap.github.models import CreateLabel, Plan, Push
+from bootstrap.github.models import CreateLabel, Plan
 from bootstrap.github.repo import Repo
 from bootstrap.github.settings_file import load_desired
 
@@ -475,19 +475,6 @@ def test_a_live_dry_run_writes_nothing(tmp_path: Path, fake_gh: FakeGh) -> None:
     assert fake_gh.writes() == []
 
 
-def test_a_plan_with_a_push_is_not_run(tmp_path: Path, fake_gh: FakeGh) -> None:
-    def change(state: dict[str, Any]) -> None:
-        state["branches"] = []
-
-    target = prepare(tmp_path, fake_gh, change=change)
-
-    result = run(target, fake_gh)
-
-    assert result.returncode == 1
-    assert "cannot push the first commit yet" in result.stderr
-    assert fake_gh.writes() == []
-
-
 @pytest.mark.parametrize(
     "answer", [None, {"id": 27775135}, [1], "x"], ids=["null", "no timestamp", "list", "string"]
 )
@@ -576,11 +563,21 @@ def test_the_write_guard_accepts_a_write_under_the_repo() -> None:
     check_write(Repo("octo", "widgets"), "repos/octo/widgets", "PATCH")
 
 
-def test_an_unexpected_error_in_one_operation_still_gives_a_report(tmp_path: Path) -> None:
+def test_an_unexpected_error_in_one_operation_still_gives_a_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     desired = load_desired(repo_with_settings(tmp_path / "repo"))
-    plan = Plan(operations=[Push(branch="main"), CreateLabel(label=desired.labels[0])])
+    label = CreateLabel(label=desired.labels[0])
 
-    report = execute(tmp_path, Repo("octo", "widgets"), plan, desired, "main")
+    def explode(operation: object) -> None:
+        raise RuntimeError("something odd")
+
+    monkeypatch.setattr("bootstrap.github.executor.request_for", explode)
+
+    report = execute(
+        tmp_path, Repo("octo", "widgets"), Plan(operations=[label, label]), desired, "main"
+    )
 
     assert [r.outcome for r in report.results] == ["failed", "not_run"]
+    assert "something odd" in str(report.results[0].reason)
     assert report.failed

@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from bootstrap import gitutil
+from bootstrap.errors import BootstrapError
 from bootstrap.github import gh
 from bootstrap.github.gh import GhError
 from bootstrap.github.models import (
@@ -13,6 +15,7 @@ from bootstrap.github.models import (
     DesiredState,
     Operation,
     Plan,
+    Push,
     Report,
     Result,
     UpdateRepository,
@@ -55,7 +58,7 @@ def request_for(operation: Operation) -> tuple[str, str, dict[str, Any]]:
         return "POST", "/rulesets", operation.ruleset.model_dump()
     if isinstance(operation, UpdateRuleset):
         return "PUT", f"/rulesets/{operation.id}", operation.ruleset.model_dump()
-    raise ValueError(f"this version cannot run the operation {operation.op}")
+    raise ValueError(f"no request for the operation {operation.op}")
 
 
 def failure(operation: Operation, error: GhError) -> Result:
@@ -106,6 +109,31 @@ def check_response(
     return Result(operation=operation, outcome="applied")
 
 
+def run_push(target: Path, repo: Repo, operation: Push) -> Result:
+    """Push the first commit. The report says which commit went to GitHub, even on a failure."""
+    branch = operation.branch
+    try:
+        pushed = gitutil.push(target, branch)
+        commit = gitutil.head_commit(target, branch)
+    except BootstrapError as error:
+        return Result(operation=operation, outcome="failed", reason=str(error))
+    done = f"pushed {commit} to refs/heads/{branch}"
+    if pushed.exit_code != 0:
+        reason = f"{done}, but git exited {pushed.exit_code}"
+        return Result(operation=operation, outcome="failed", reason=reason)
+    if pushed.flag == "*":  # the push made the branch. Someone else could have pushed first.
+        try:
+            now = gh.api(target, repo, f"repos/{repo.slug}")
+        except GhError as error:
+            reason = f"{done}, but cannot read the default branch: {error.detail}"
+            return Result(operation=operation, outcome="failed", reason=reason)
+        default = now.get("default_branch") if isinstance(now, dict) else None
+        if default != branch:
+            reason = f"{done}, but GitHub's default branch is {default}"
+            return Result(operation=operation, outcome="failed", reason=reason)
+    return Result(operation=operation, outcome="applied", reason=done)
+
+
 def run_operation(
     target: Path,
     repo: Repo,
@@ -113,6 +141,8 @@ def run_operation(
     desired: DesiredState,
     default_branch: str | None,
 ) -> Result:
+    if isinstance(operation, Push):
+        return run_push(target, repo, operation)
     method, suffix, body = request_for(operation)
     try:
         if isinstance(operation, UpdateRuleset):
