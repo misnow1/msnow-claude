@@ -82,6 +82,13 @@ def read_repository(target: Path, repo: Repo) -> Any:
         )
     if permissions.get("admin") is not True:
         raise BootstrapError(f"gh needs admin rights on {repo.slug}")
+    # GitHub redirects a read of a renamed repo, but not a write with a body.
+    full_name = repository.get("full_name")
+    if isinstance(full_name, str) and full_name.lower() != repo.slug.lower():
+        raise BootstrapError(
+            f"origin names {repo.slug}, but GitHub calls the repo {full_name}. "
+            f"Update origin to {full_name}."
+        )
     return repository
 
 

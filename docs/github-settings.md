@@ -55,8 +55,9 @@ A private repo on GitHub Free has no rulesets. The plan then skips the ruleset a
 ## Dry run
 
 `bootstrap github TARGET --dry-run --state FILE` prints the plan as JSON and changes nothing.
-This version supports only the dry run, so the command needs `--dry-run`.
+With `--dry-run`, the command prints the plan and changes nothing.
 Without `--state`, the command reads GitHub through `gh`. See "Read GitHub through gh".
+Without `--dry-run`, the command runs the plan. See "Run the plan".
 The state file is JSON. It replaces the read of GitHub through `gh`. These are its keys:
 
 - `repository`: the repo settings, and `default_branch`. The command needs `default_branch` when a ruleset has an exclude pattern other than `~DEFAULT_BRANCH` and `~ALL`.
@@ -71,7 +72,7 @@ Each object can hold the extra keys that the GitHub API returns. You can paste t
 The command `gh api repos/O/R/labels` returns 30 labels for each page. Use `--paginate` and join the pages into one list under `labels`.
 The command ignores a misspelled key. The field then counts as unknown, so the plan sets it.
 
-The plan has two lists. `operations` holds `push`, `update_repository`, `create_label`, `create_ruleset` and `update_ruleset` operations, in this order: the push comes first, and the ruleset comes last. `skipped` holds the operations that the command cannot run, each with a reason.
+The plan has two lists. `operations` holds `push`, `update_repository`, `create_label`, `create_ruleset` and `update_ruleset` operations, in this order: the push comes first, and the ruleset comes last. `skipped` holds the operations that the command cannot run, each with a reason. An `update_ruleset` operation has `expected_updated_at`, the time of the last change of the ruleset when the command read it. The run uses it to find a change that came in between. A state file can leave it out.
 
 ## Read GitHub through gh
 
@@ -90,3 +91,58 @@ For an empty repo, the local branch must have the name of the default branch tha
 The command reads only repo-level data. It reads rulesets with `includes_parents=false`, so it never reads or plans a ruleset of an organization.
 
 Two cases are not errors. A private repo on GitHub Free has no rulesets, so the plan skips the ruleset. A token can lack the right to edit rulesets. A fine-grained token can be like this. The plan then skips the ruleset that it cannot read, with the reason "needs admin access to read the ruleset". The command then does not try to create a second ruleset with the same name.
+
+## Run the plan
+
+`bootstrap github TARGET` without `--dry-run` reads GitHub, plans, and runs the plan. It prints a report as JSON.
+
+| Flags | State comes from | Effect |
+| --- | --- | --- |
+| `--dry-run --state FILE` | the file | prints the plan |
+| `--dry-run` | GitHub, through `gh` | prints the plan |
+| none | GitHub, through `gh` | runs the plan and prints the report |
+
+A state file only works with `--dry-run`. A fake state cannot change GitHub.
+This version cannot push the first commit of an empty repo. If the plan has a `push`, the command stops before any change. Push the commit yourself, then run it again.
+
+### The report
+
+The report has two lists: `results` and `plan_skipped`. `plan_skipped` is the skip list of the plan, such as "rulesets are not available". Each entry in `results` has the operation, an `outcome` and sometimes a `reason`.
+
+| Outcome | Meaning |
+| --- | --- |
+| `applied` | GitHub made the change. The reason can name fields that GitHub did not apply. |
+| `skipped` | An organization policy blocked the change. Or GitHub ignored it: it applied no field of a settings change, or it cut down a ruleset. The ruleset then exists, but not as planned. |
+| `failed` | The change did not happen, or the result is unknown. |
+| `not_run` | An earlier operation failed, so the command did not try this one. |
+
+The command stops at the first `failed` result. It still prints the report. The exit code is 1 when a result is `failed`, and 0 otherwise.
+A run after a failure finishes the work. A run after a full success makes no change, and prints an empty report.
+
+### What counts as a policy block
+
+A result is `skipped` when two things are true. The status is 403 or 422, and the message names an organization or enterprise policy.
+The message must not name any of these:
+
+- SAML, single sign-on or OAuth.
+- an IP allow list, a token, credentials or two-factor authentication.
+- a bypass actor, an owner or admin role, a member, a permission, an authorization, a scope, an approval or access.
+
+Those words name an access problem, so the result stays `failed`.
+This rule is a guess. We have no verified GitHub message for an organization policy. A policy block that does not say "policy" is `failed`, so you see it. When you see a real message, record it here and check the rule.
+
+GitHub can ignore a setting. An example is `allow_auto_merge` on a private repo on GitHub Free. The report then shows `skipped`, or `applied` with a reason. The plan cannot know this limit, so the next run plans the same change again and reports it again. The exit code stays 0.
+
+A write can time out or return a 5xx answer, and the change can still apply. The reason then says "the result is unknown". Run the command again to see the real state.
+The timeout is 60 seconds. Set `BOOTSTRAP_GH_TIMEOUT` to a whole number of seconds from 1 to 3600 to change it.
+
+### What the run changes
+
+The run changes only repo-level settings: the merge settings, the labels and the ruleset of the repo. Every write goes to `repos/OWNER/REPO`. The command never deletes anything, and never writes to an organization.
+Before it replaces a ruleset, it reads the ruleset again. If the ruleset changed after the first read, the result is `failed`, and a new run starts from the new state. If the read gave no time of the last change, the result is also `failed`.
+If GitHub reports a new name for the repo, the command stops before any write, and tells you to update `origin`.
+
+### Check a run by hand
+
+Use a scratch repo. Run the command, then run it again. The second report must be empty.
+To check the replace of a ruleset, change the ruleset in the GitHub page of the repo. Turn off the dismissal of stale approvals, add a rule and add a bypass actor. Run the command. Your rule and actor must stay, and the dismissal must be on again. Run the command a third time. The report must be empty.
