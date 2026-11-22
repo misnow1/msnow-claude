@@ -131,7 +131,7 @@ After a push that created the branch, the command reads the default branch of th
 A failed push shows only a redacted reason. The reason comes from the status line of git for the branch. A word that holds a URL or an `@` becomes `<url>`, because a remote URL can hold a token. Git speaks English for this push, so the prefixes of its messages are the same on every machine. A commit that adds a file under `.github/workflows` needs the `workflow` scope for the token. Run `gh auth refresh -s workflow` if GitHub refuses it.
 
 The push has a timeout of 300 seconds. Set `BOOTSTRAP_PUSH_TIMEOUT` to a whole number of seconds from 1 to 3600 to change it. After a timeout, Ctrl-C, SIGTERM or a hangup, the command kills `git` and its helpers. If you run the command with `nohup`, it keeps the hangup ignored. The result is unknown, because GitHub can have the commit already. Run the command again. It finds the branch and does not push it twice.
-A push over SSH needs a key in `ssh-agent` and a known host key. The command cannot answer a question, so the push times out.
+The command cannot answer a question, so git must sign in without one. A push over https needs a credential helper. Run `gh auth setup-git` once to set it up. Without one, git asks for a user name, the command turns off the prompt, and the push fails with "could not read Username". A push over SSH needs a key in `ssh-agent` and a known host key. Without them, the push times out. The origin form `git@github.com:OWNER/REPO.git` works.
 
 ### What counts as a policy block
 
