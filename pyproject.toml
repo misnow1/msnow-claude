@@ -21,3 +21,6 @@ module-name = "bootstrap"
 
 [tool.uv]
 required-version = ">=0.9.30"
+
+[tool.pytest.ini_options]
+markers = ["network: runs the real pre-commit, Go and scc, so it needs network on its first run"]
