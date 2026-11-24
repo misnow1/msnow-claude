@@ -11,16 +11,17 @@ import pytest
 import yaml
 from conftest import (
     FIXTURES,
-    SETTINGS_TEMPLATE,
     FixtureTemplate,
     git,
     make_repo,
     repo_with_settings,
     run_github,
+    settings_text,
+    with_required_checks,
 )
 
 Apply = Callable[..., subprocess.CompletedProcess[str]]
-VALID = SETTINGS_TEMPLATE.read_text()
+VALID = settings_text()
 MATCHING = json.loads((FIXTURES / "matching.json").read_text())
 
 
@@ -225,10 +226,12 @@ def test_apply_writes_a_settings_file_that_github_accepts(
     target = make_repo(tmp_path / "repo")
 
     applied = run_apply(target, released.path)
-    result = run_github(target, "--dry-run", "--state", str(FIXTURES / "matching.json"))
+    state = write_state(tmp_path, with_required_checks(MATCHING, ["file-length"]))
+    result = run_github(target, "--dry-run", "--state", str(state))
 
     assert applied.returncode == 0, applied.stderr
-    assert yaml.safe_load((target / ".github/bootstrap.yml").read_text())["required_checks"] == []
+    checks = yaml.safe_load((target / ".github/bootstrap.yml").read_text())["required_checks"]
+    assert "file-length" in checks
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {"operations": [], "skipped": []}
 

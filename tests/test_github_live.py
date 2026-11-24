@@ -12,7 +12,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import FIXTURES, FakeGh, add_origin, fake_state, git, repo_with_settings, run_github
+from conftest import (
+    FIXTURES,
+    FakeGh,
+    add_origin,
+    fake_state,
+    git,
+    repo_with_settings,
+    run_github,
+    settings_text,
+)
 
 Change = Callable[[dict[str, Any]], None]
 
@@ -414,9 +423,7 @@ def test_a_directory_that_is_not_a_git_repo_is_not_reported_as_a_missing_origin(
 ) -> None:
     target = tmp_path / "plain"
     (target / ".github").mkdir(parents=True)
-    (target / ".github/bootstrap.yml").write_text(
-        (FIXTURES / ".." / ".." / ".." / "template" / ".github" / "bootstrap.yml").read_text()
-    )
+    (target / ".github/bootstrap.yml").write_text(settings_text())
 
     result = run_github(target, "--dry-run", env=fake_gh.env)
 

@@ -10,7 +10,7 @@ dependencies = ["copier>=9.19,<9.20", "packaging>=23", "pydantic>=2.14,<3", "pyy
 bootstrap = "bootstrap.cli:main"
 
 [dependency-groups]
-dev = ["mypy>=2.4,<3", "pytest>=9.2,<10", "ruff>=0.17,<0.18", "types-pyyaml>=6,<7"]
+dev = ["jinja2>=3,<4", "mypy>=2.4,<3", "pytest>=9.2,<10", "ruff>=0.17,<0.18", "types-pyyaml>=6,<7"]
 
 [build-system]
 requires = ["uv_build>=0.9.30,<0.14"]

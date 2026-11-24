@@ -2,14 +2,17 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import jinja2
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -122,7 +125,38 @@ def run_apply() -> Callable[..., subprocess.CompletedProcess[str]]:
 
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "github"
-SETTINGS_TEMPLATE = REPO_ROOT / "template" / ".github" / "bootstrap.yml"
+SETTINGS_TEMPLATE = REPO_ROOT / "template" / ".github" / "bootstrap.yml.jinja"
+CHECKS_BLOCK = re.compile(r"^required_checks:.*(?:\n  - .*)*\n?", re.MULTILINE)
+GITHUB_ACTIONS_ID = 15368
+
+
+def settings_text(checks: Sequence[str] = ()) -> str:
+    """The GitHub settings file of the template for no language, with `checks` required.
+
+    The tests that plan a ruleset start from no required check, whatever the template lists.
+    """
+    environment = jinja2.Environment(keep_trailing_newline=True)
+    text = environment.from_string(SETTINGS_TEMPLATE.read_text()).render(languages=[])
+    replaced, count = CHECKS_BLOCK.subn(f"required_checks: [{', '.join(checks)}]\n", text)
+    assert count == 1, "the settings template has no required_checks block"
+    return replaced
+
+
+def with_required_checks(state: Mapping[str, Any], checks: Sequence[str]) -> dict[str, Any]:
+    """A copy of a state fixture whose first ruleset requires `checks` from GitHub Actions."""
+    copy = deepcopy(dict(state))
+    copy["rulesets"][0]["rules"].append(
+        {
+            "type": "required_status_checks",
+            "parameters": {
+                "required_status_checks": [
+                    {"context": check, "integration_id": GITHUB_ACTIONS_ID} for check in checks
+                ],
+                "strict_required_status_checks_policy": False,
+            },
+        }
+    )
+    return copy
 
 
 def run_github(
@@ -275,7 +309,5 @@ def add_origin(target: Path, url: str = f"https://github.com/{SLUG}.git") -> Pat
 def repo_with_settings(path: Path, text: str | None = None) -> Path:
     """Create a git repo that holds a GitHub settings file and nothing else."""
     make_repo(path)
-    write_files(
-        path, {".github/bootstrap.yml": SETTINGS_TEMPLATE.read_text() if text is None else text}
-    )
+    write_files(path, {".github/bootstrap.yml": settings_text() if text is None else text})
     return path

@@ -480,7 +480,7 @@ def test_an_existing_repo_does_not_read_a_state_file(
 def test_a_template_without_a_settings_file_stops_before_any_write_on_a_live_run(
     tmp_path: Path, fake_gh: FakeGh, released: FixtureTemplate, run_apply: Apply
 ) -> None:
-    released.release("v0.2.0", {"template/.github/bootstrap.yml": None})
+    released.release("v0.2.0", {"template/.github/bootstrap.yml.jinja": None})
     target = prepare(tmp_path, fake_gh)
 
     for flags in (("--dry-run",), ()):

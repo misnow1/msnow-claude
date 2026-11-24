@@ -18,6 +18,7 @@ We accept these limits:
 - `uvx --exclude-newer` makes the dependencies of pre-commit resolve the same way each time. The UTC timestamp moves only when someone edits the Makefile.
 - `pre-commit install` records the path of the `uvx` environment in `.git/hooks`. After `uv cache clean`, the hooks need `make hooks` again.
 - The shared CI workflow runs on `push` to `main` and on each pull request. A repo with another default branch still gets the pull request run. The pull request checks of #13 go in a separate `pull-request.yml`. Their `on:` needs the `edited` type, and the code checks must not rerun when someone edits the description.
-- The settings file `.github/bootstrap.yml` stays a static file until #10 adds the job names of a language. #10 then renames it to `bootstrap.yml.jinja`.
+- The settings file `.github/bootstrap.yml` stays a static file until #10 adds the job names of a language. #10 then renames it to `bootstrap.yml.jinja`. Changed by part 9b of #9 on 2026-11-24: the file is `bootstrap.yml.jinja` from the start, because #10, #11 and #12 can run in parallel. The settings file, the pre-commit config and the shared workflow each have one comment slot for each ticket. A ticket adds its lines below its own slot and keeps the slot, so git does not see a conflict between two tickets.
+- The shared workflow has no `merge_group` trigger. A repo that turns on a merge queue must add one. The runner is `ubuntu-latest`, as in this repo's own workflow, so the image floats. The setup-uv cache is off, because the job caches nothing that it needs.
 
 The 500-line limit applies to the test files of a repo too. At the time of this decision, two test files of this repo have more than 500 code lines. #18 must split them before it applies the limit here.

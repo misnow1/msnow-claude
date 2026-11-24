@@ -1,8 +1,9 @@
 """Helpers for the pipeline tests: repos with the template applied, make, and the real tools."""
 
 import os
+import re
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -174,3 +175,95 @@ class Projects:
             commit_all(repo)
             self.made[name] = Project(repo, git(repo, "rev-parse", "HEAD").strip())
         return self.made[name]
+
+
+# --- Rules for the workflows and the required checks ---------------------------------------
+
+PINNED = re.compile(r"^(?:[^@\s]+@[0-9a-f]{40}|docker://\S+@sha256:[0-9a-f]{64})$")
+NEEDED_TYPES = {"opened", "synchronize", "reopened"}
+FILTERS = ("paths", "paths-ignore", "branches", "branches-ignore")
+
+
+def triggers_of(workflow: dict[Any, Any]) -> dict[str, Any]:
+    """The `on:` of a workflow as a mapping. PyYAML reads the key `on` as True."""
+    on = workflow.get(True, workflow.get("on"))
+    if isinstance(on, str):
+        return {on: None}
+    if isinstance(on, list):
+        return dict.fromkeys(on)
+    return dict(on or {})
+
+
+def unpinned(job: dict[str, Any]) -> list[str]:
+    """The `uses:` values of a job and its steps that are not a full commit SHA."""
+    uses = [job["uses"]] if "uses" in job else []
+    uses += [step["uses"] for step in job.get("steps", []) if "uses" in step]
+    return [use for use in uses if not use.startswith("./") and not PINNED.match(use)]
+
+
+def job_problems(name: str, job: dict[str, Any]) -> list[str]:
+    """What is wrong with one required job itself."""
+    problems = []
+    strategy = job.get("strategy") or {}
+    if isinstance(strategy, str) or strategy.get("matrix"):  # a string is an expression
+        problems.append(f"required job {name} uses a matrix")
+    if "uses" in job:
+        problems.append(f"required job {name} uses a reusable workflow")
+    if "if" in job:  # GitHub counts a skipped job as a success for a required check
+        problems.append(f"required job {name} has an if condition")
+    if job.get("continue-on-error"):
+        problems.append(f"required job {name} has continue-on-error")
+    return problems
+
+
+def trigger_problems(name: str, triggers: dict[str, Any]) -> list[str]:
+    """What is wrong with the triggers of the workflow that holds a required job."""
+    if "pull_request" not in triggers:
+        return [f"required job {name} has no pull_request trigger"]
+    pull_request = triggers["pull_request"] or {}
+    problems = [
+        f"required job {name}: pull_request has a {key} filter"
+        for key in FILTERS
+        if key in pull_request
+    ]
+    types = pull_request.get("types")
+    types = [types] if isinstance(types, str) else types
+    if types is not None and (missing := NEEDED_TYPES - set(types)):
+        problems.append(
+            f"required job {name}: pull_request types lack {', '.join(sorted(missing))}"
+        )
+    return problems
+
+
+def workflow_problems(files: Mapping[str, str], required: Sequence[str]) -> list[str]:
+    """Rules for the workflows of a repo and the check names that its ruleset requires.
+
+    For all jobs: a job name is unique across the files, and each action is pinned to a full
+    commit SHA. For each required job and its workflow: no matrix (a `strategy` given as an
+    expression counts as one), no reusable workflow, no `if` condition (GitHub counts a skipped
+    job as a success) and no `continue-on-error` (a failing job must fail the check). The
+    workflow has a `pull_request` trigger
+    with no path or branch filter, and `types` (when given) that run on a new commit. The required
+    names must match job names, and the list must not be empty.
+
+    Limits: it does not check that a language job name starts with the language name, and it sees
+    only the files that it gets.
+    """
+    problems = [] if required else ["no required checks"]
+    jobs: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for text in files.values():
+        workflow = yaml.safe_load(text)
+        triggers = triggers_of(workflow)
+        for job_id, job in workflow["jobs"].items():
+            jobs.setdefault(job.get("name", job_id), []).append((job, triggers))
+    for name, found in jobs.items():
+        if len(found) > 1:
+            problems.append(f"job name used twice: {name}")
+        for job, _ in found:
+            problems += [f"action not pinned to a full SHA: {use}" for use in unpinned(job)]
+    for name in required:
+        if name not in jobs:
+            problems.append(f"required check without a job: {name}")
+        for job, triggers in jobs.get(name, []):
+            problems += job_problems(name, job) + trigger_problems(name, triggers)
+    return problems
