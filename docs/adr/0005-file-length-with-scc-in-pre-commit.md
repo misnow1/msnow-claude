@@ -1,0 +1,23 @@
+# Check file length with scc in a pre-commit hook
+
+A bootstrapped repo checks file length with `scc`, and a pre-commit `local` hook runs it. The hook has `language: golang`, installs the pinned `scc` module with `go install`, and sets `language_version` so pre-commit downloads that Go version. Without the setting, pre-commit uses any Go on the machine, and `GOTOOLCHAIN` is not `local`. `make length` runs the hook through `uvx` with a pinned pre-commit version, a pinned Python version and a pinned `--exclude-newer` timestamp. So the commit hook, CI and an agent share one install path, and nobody needs Docker or a Go install.
+
+For this check, the hook is the shared definition. The spec says that hooks, CI and agents call the same Make targets. Here the order is the reverse, because the hook installs `scc`, and a hook that called `make length` would recurse. The hooks of the other checks call their Make targets, and they use `language: unsupported`. That language needs pre-commit 4.4.0, so the config sets this as its minimum version.
+
+A repo with no detected language gets a hook with `language: unsupported`, and not a golang hook. pre-commit installs the environment of each selected hook before it filters files, so a golang hook would download Go to check nothing.
+
+`make length` gives pre-commit the files that git tracks and the untracked files that git does not ignore. A new long file then fails `make check` before its commit. `pre-commit run --all-files` sees only tracked files. The cost is that a local run can check an untracked file that CI never sees, such as build output. `AGENTS.md` tells agents to add build output to `.gitignore`. A failed `git ls-files` fails the target, so the check cannot pass with no files in silence. The target gives each path a `./` prefix with `printf`, so pre-commit never reads a name such as `-o` as an option.
+
+The script `scripts/check-file-length` runs `scc` for one file at a time. It finds the `Code` column in the CSV header and reads that field by its position from the end of the row. A path can hold a comma, and the numeric fields after the path never do. The script fails when `scc` prints no row. This happens for a file type that `scc` does not know. The script also fails when the count is not a number. A check that cannot count must not pass. When an executable Python script with no extension has a shebang, `identify` tags it as Python. pre-commit passes it to the script, and `scc` counts it from the shebang. The script skips an empty file, a file that is gone, and a generated file. It prints a line for each generated file. A generated file has a comment in its first 10 lines. The comment matches the Go convention, the protoc and grpc header, or `@generated`. A bare "do not edit" comment does not exempt a file.
+
+`scc` counts code lines only. It counts a Python docstring that starts a line as a comment. The limit is 500 code lines, and `AGENTS.md` states it. The complexity limits are 10 for Ruff and for `cyclop`, and 15 for Clippy. The Python, Go and Rust tickets enforce the complexity limits in their own tool configs.
+
+We accept these limits:
+
+- pre-commit downloads the Go archive from `dl.google.com` and checks no checksum. TLS is the only protection. Go's checksum database does cover the `scc` module. A later change can use `actions/setup-go` with `language_version: system`.
+- `uvx --exclude-newer` makes the dependencies of pre-commit resolve the same way each time. The UTC timestamp moves only when someone edits the Makefile.
+- `pre-commit install` records the path of the `uvx` environment in `.git/hooks`. After `uv cache clean`, the hooks need `make hooks` again.
+- The shared CI workflow runs on `push` to `main` and on each pull request. A repo with another default branch still gets the pull request run. The pull request checks of #13 go in a separate `pull-request.yml`. Their `on:` needs the `edited` type, and the code checks must not rerun when someone edits the description.
+- The settings file `.github/bootstrap.yml` stays a static file until #10 adds the job names of a language. #10 then renames it to `bootstrap.yml.jinja`.
+
+The 500-line limit applies to the test files of a repo too. At the time of this decision, two test files of this repo have more than 500 code lines. #18 must split them before it applies the limit here.

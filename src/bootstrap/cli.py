@@ -50,7 +50,7 @@ from bootstrap.versions import resolve_version
 
 DEFAULT_TEMPLATE = "https://github.com/misnow1/msnow-claude.git"
 AGENT_FILES = {
-    "AGENTS.md": ("agents", ["tdd", "libraries", "scripts", "issues", "memory"]),
+    "AGENTS.md": ("agents", ["tdd", "libraries", "scripts", "issues", "memory", "checks"]),
     "CLAUDE.md": ("claude", ["agents-import"]),
 }
 

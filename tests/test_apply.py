@@ -33,6 +33,9 @@ def test_apply_to_empty_repo_writes_agent_docs_and_answers_file(
         "CLAUDE.md",
         ".copier-answers.yml",
         ".github/bootstrap.yml",
+        ".pre-commit-config.yaml",
+        "Makefile",
+        "scripts/check-file-length",
     }
 
 
@@ -42,6 +45,7 @@ AGENTS_SECTIONS = {
     "scripts": "Each repeatable process has a committed script",
     "issues": "search for related issues and pull requests",
     "memory": "Decisions go in `docs/adr/`",
+    "checks": "Run `make check` before each commit",
 }
 
 
