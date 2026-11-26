@@ -29,8 +29,12 @@ def test_apply_to_empty_repo_writes_agent_docs_and_answers_file(
 
     assert result.returncode == 0, result.stderr
     assert tree(target) == {
+        ".claude/agents/challenger.md",
+        ".claude/agents/issue-reviewer.md",
+        ".claude/settings.json",
         "AGENTS.md",
         "CLAUDE.md",
+        "docs/severity-policy.md",
         ".copier-answers.yml",
         ".github/bootstrap.yml",
         ".github/workflows/shared.yml",
@@ -40,14 +44,60 @@ def test_apply_to_empty_repo_writes_agent_docs_and_answers_file(
     }
 
 
-AGENTS_SECTIONS = {
-    "tdd": "Write a failing test first",
-    "libraries": "Prefer a maintained third-party library",
-    "scripts": "Each repeatable process has a committed script",
-    "issues": "search for related issues and pull requests",
-    "memory": "Decisions go in `docs/adr/`",
-    "checks": "Run `make check` before each commit",
+AGENTS_SECTIONS: dict[str, tuple[str, ...]] = {
+    "tdd": ("Write a failing test first",),
+    "libraries": ("Prefer a maintained third-party library",),
+    "scripts": ("Each repeatable process has a committed script",),
+    "issues": (
+        "Before you file or edit an issue or a batch of issues, search for related issues",
+        "Then have an independent reviewer review them",
+    ),
+    "memory": ("Decisions go in `docs/adr/`",),
+    "checks": ("Run `make check` before each commit",),
+    "challenge": (
+        "A round is one review and one fix pass",
+        "fix each finding, majors included",
+        "after three rounds",
+        "With a major left, stop and ask the user",
+        "the work continues",
+        "when a fix would change the approved plan, stop and ask the user",
+        "not your conclusions",
+        "The reviewer does not edit files",
+        "`docs/severity-policy.md`",
+        "`Plan review`",
+        "`No remaining findings.`",
+        "before any footer",
+    ),
 }
+CLAUDE_SECTIONS: dict[str, tuple[str, ...]] = {
+    "workflow": (
+        "Start each change in plan mode",
+        "Implement only after the user approves",
+        "Run the `challenger` agent on each plan before you present it",
+        "and on each diff before a pull request",
+        "without a `model` parameter",
+        "Run the `issue-reviewer` agent",
+        "they are not read-only by tool",
+        "`/mattpocock-skills:pr`",
+    ),
+    "subagent-model": (
+        "`CLAUDE_CODE_SUBAGENT_MODEL`",
+        "does not set `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`",
+        "still wins",
+        "Explore and Plan",
+        "costs more",
+        "trust the folder",
+        "subagents/agent-",
+    ),
+}
+
+
+def section(text: str, name: str) -> str:
+    """The text of a marked section, with each run of whitespace as one space (lines wrap)."""
+    begin = text.index(f"<!-- bootstrap:begin {name} -->")
+    end = text.index(f"<!-- bootstrap:end {name} -->")
+    assert begin < end
+    return " ".join(text[begin:end].split())
 
 
 def test_agents_md_has_marked_sections_that_state_each_rule(
@@ -59,11 +109,9 @@ def test_agents_md_has_marked_sections_that_state_each_rule(
 
     assert result.returncode == 0, result.stderr
     text = (target / "AGENTS.md").read_text()
-    for name, phrase in AGENTS_SECTIONS.items():
-        begin = text.index(f"<!-- bootstrap:begin {name} -->")
-        end = text.index(f"<!-- bootstrap:end {name} -->")
-        assert begin < end
-        assert phrase in text[begin:end]
+    for name, phrases in AGENTS_SECTIONS.items():
+        for phrase in phrases:
+            assert phrase in section(text, name), (name, phrase)
     assert "Domain terms go in `GLOSSARY.md`" in text
     assert "Rules for how to work go in `AGENTS.md`" in text
 
@@ -226,3 +274,17 @@ def test_foreign_answers_file_fails_and_is_kept(
     assert result.returncode != 0
     assert (target / ".copier-answers.yml").read_text() == foreign
     assert tree(target) == {".copier-answers.yml"}
+
+
+def test_claude_md_has_marked_sections_that_state_each_rule(
+    tmp_path: Path, released: FixtureTemplate, run_apply: Apply
+) -> None:
+    target = make_repo(tmp_path / "repo")
+
+    result = run_apply(target, released.path)
+
+    assert result.returncode == 0, result.stderr
+    text = (target / "CLAUDE.md").read_text()
+    for name, phrases in CLAUDE_SECTIONS.items():
+        for phrase in phrases:
+            assert phrase in section(text, name), (name, phrase)
