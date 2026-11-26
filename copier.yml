@@ -10,6 +10,10 @@ _exclude:
   - ".svn"
   - "AGENTS.md"
   - "CLAUDE.md"
+# Copier writes these files once, and the project owns them. If a later version of the template
+# drops one of them, an update deletes the edited copy in each project.
+_skip_if_exists:
+  - "docs/severity-policy.md"
 
 languages:
   type: yaml

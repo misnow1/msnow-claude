@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import yaml
 from conftest import (
     BOOTSTRAP,
     FIXTURES,
@@ -334,13 +335,11 @@ def test_an_existing_repo_with_a_hidden_written_path_is_warned_and_not_stopped(
 def test_a_skip_if_exists_file_that_exists_is_neither_listed_nor_committed(
     tmp_path: Path, fake_gh: FakeGh, template: FixtureTemplate, run_apply: Apply
 ) -> None:
-    copier_yml = (template.path / "copier.yml").read_text()
+    copier_yml = yaml.safe_load((template.path / "copier.yml").read_text())
+    copier_yml["_skip_if_exists"] = [*copier_yml.get("_skip_if_exists", []), "policy.md"]
     template.release(
         "v0.1.0",
-        {
-            "copier.yml": copier_yml + "\n_skip_if_exists:\n  - policy.md\n",
-            "template/policy.md": "x\n",
-        },
+        {"copier.yml": yaml.safe_dump(copier_yml, sort_keys=False), "template/policy.md": "x\n"},
     )
     target = prepare(tmp_path, fake_gh)
     (target / "policy.md").write_text("mine\n")
