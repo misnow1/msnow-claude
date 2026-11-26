@@ -23,7 +23,7 @@ GitHub accepts only some pairs of squash title and message. The file must use on
 | `ruleset.required_approving_review_count` | integer, 0 to 10 | Approvals that a pull request needs. This is a minimum. A higher value in GitHub stays. |
 | `ruleset.dismiss_stale_reviews_on_push` | boolean | Dismiss approvals when a push adds commits. |
 | `ruleset.allowed_merge_methods` | list of `merge`, `squash`, `rebase` | Merge methods that the ruleset allows. |
-| `required_checks` | list of strings | Unique names of the CI checks that the ruleset requires. The list is empty now. Later tickets add names. The ruleset pins each check to GitHub Actions, because any commit status can use a name without the pin. |
+| `required_checks` | list of strings | Unique names of the CI checks that the ruleset requires. The template lists `file-length`. Later tickets add their own names, for example each language. The ruleset pins each check to GitHub Actions, because any commit status can use a name without the pin. |
 
 Write each `color` in quotes, with six hexadecimal digits. YAML reads an unquoted `000000` as a number.
 Label names are unique when you ignore case.
@@ -51,6 +51,19 @@ A second run after an applied plan makes no change.
 Only repo rulesets count. The command never changes an organization ruleset.
 The command skips a repo ruleset with the same name that targets tags or pushes. GitHub does not allow a second ruleset with that name.
 A private repo on GitHub Free has no rulesets. The plan then skips the ruleset and lists it under `skipped`.
+
+## Required checks
+
+The template makes `file-length` a required check. The ruleset then blocks each merge until a job named `file-length` reports success.
+Know these cases before you run `bootstrap github` on an existing repo:
+
+- A check that never reports blocks every merge, except for a repo admin who bypasses the ruleset. This happens when Actions is off, when a private repo has no Actions minutes left, and when the head commit message has `[skip ci]`.
+- A source file of a detected language with more than 500 code lines fails `file-length` on each pull request. Run `make check` until it passes. Then run the command.
+- A job named `file-length` in another workflow also satisfies the check. The ruleset matches the name and not the file.
+- The check runs the workflow of the pull request head. A pull request can change `shared.yml`, or add another job with that name, and still pass. The check is a quality gate and not a security control.
+- An organization policy can allow only some actions. If it blocks `astral-sh/setup-uv`, the job fails at startup, and every merge blocks until an admin allows the action.
+- A repo with a merge queue needs a `merge_group` trigger. The shared workflow has none.
+- The shared workflow runs on `push` to `main`. A repo with another default branch still runs the check on each pull request.
 
 ## Dry run
 

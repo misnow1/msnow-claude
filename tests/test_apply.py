@@ -33,6 +33,7 @@ def test_apply_to_empty_repo_writes_agent_docs_and_answers_file(
         "CLAUDE.md",
         ".copier-answers.yml",
         ".github/bootstrap.yml",
+        ".github/workflows/shared.yml",
         ".pre-commit-config.yaml",
         "Makefile",
         "scripts/check-file-length",
